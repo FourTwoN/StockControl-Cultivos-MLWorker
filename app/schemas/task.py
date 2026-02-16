@@ -36,6 +36,10 @@ class ProcessingRequest(BaseModel):
         default=None,
         description="Optional callback URL for results notification",
     )
+    species_config: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Species configuration for classification (agro industry)",
+    )
 
     model_config = {"extra": "forbid"}
 

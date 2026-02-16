@@ -29,9 +29,10 @@ class SegmentResult:
         segment_idx: Segment index
         class_name: Segment class name
         confidence: Segmentation confidence
-        bbox: Bounding box (x1, y1, x2, y2) in pixels
-        mask_rle: Run-length encoded mask (optional)
+        bbox: Bounding box (x1, y1, x2, y2) in normalized coords
         area_px: Segment area in pixels
+        polygon: List of (x, y) points in normalized coords (optional)
+        mask_rle: Run-length encoded mask (optional)
     """
 
     segment_idx: int
@@ -39,6 +40,7 @@ class SegmentResult:
     confidence: float
     bbox: tuple[float, float, float, float]
     area_px: float
+    polygon: list[tuple[float, float]] | None = None
     mask_rle: str | None = None
 
     def to_dict(self) -> dict[str, Any]:

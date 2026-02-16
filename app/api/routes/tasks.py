@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, status
 from PIL import Image
 
-from app.api.deps import CloudTasksRequest, Storage
+from app.api.deps import CloudTasksRequest, DbSession, Storage
 from app.infra.logging import get_logger
 from app.infra.storage import TenantPathError
 from app.schemas.task import (
@@ -20,6 +20,7 @@ from app.schemas.task import (
     ProcessingRequest,
     ProcessingResponse,
 )
+from app.services.agro_processing_service import AgroProcessingService
 from app.services.processing_service import ProcessingService
 
 router = APIRouter()
@@ -133,6 +134,106 @@ async def process_task(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Processing failed: {e}",
+        )
+
+
+@router.post(
+    "/agro/process",
+    response_model=ProcessingResponse,
+    summary="Process image through Agro ML pipeline",
+    description="""
+    Agro-specific endpoint for plant detection and classification.
+
+    Pipeline steps:
+    1. Segmentation - Detect containers (cajon, segmento)
+    2. Segment filtering - Keep only largest "claro" segment
+    3. Detection - Standard YOLO for cajon, SAHI for large segments
+    4. Coordinate transformation - Segment-relative to full-image coords
+    5. Classification - Species distribution + size calculation
+    6. DB persistence - INSERT detections, classifications
+
+    Requires `species_config` in request payload for classification.
+    """,
+)
+async def process_agro_task(
+    request: ProcessingRequest,
+    storage: Storage,
+    db: DbSession,
+    _: CloudTasksRequest,
+) -> ProcessingResponse:
+    """Process an image through the Agro ML pipeline.
+
+    This endpoint handles agricultural plant detection with:
+    - SAHI tiled detection for large segments (>1M pixels)
+    - Equitable species distribution classification
+    - Direct DB persistence (no HTTP callback)
+
+    Args:
+        request: Processing request with species_config for classification
+        storage: Cloud Storage client
+        db: Async database session with RLS context
+        _: Cloud Tasks request validation
+
+    Returns:
+        ProcessingResponse with detection/classification results
+    """
+    logger.info(
+        "Received agro processing task",
+        tenant_id=request.tenant_id,
+        session_id=str(request.session_id),
+        image_id=str(request.image_id),
+        pipeline=request.pipeline,
+        has_species_config=request.species_config is not None,
+    )
+
+    try:
+        service = AgroProcessingService(
+            storage_client=storage,
+            db_session=db,
+        )
+
+        response = await service.process(request)
+
+        if response.success:
+            logger.info(
+                "Agro processing completed",
+                tenant_id=request.tenant_id,
+                image_id=str(request.image_id),
+                duration_ms=response.duration_ms,
+                detections=response.results.get("total_detected", 0),
+            )
+        else:
+            logger.warning(
+                "Agro processing failed",
+                tenant_id=request.tenant_id,
+                image_id=str(request.image_id),
+                error=response.error,
+            )
+
+        return response
+
+    except TenantPathError as e:
+        logger.error(
+            "Tenant path validation failed",
+            tenant_id=request.tenant_id,
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Tenant validation failed: {e}",
+        )
+
+    except Exception as e:
+        logger.error(
+            "Agro processing error",
+            tenant_id=request.tenant_id,
+            image_id=str(request.image_id),
+            error=str(e),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Agro processing failed: {e}",
         )
 
 

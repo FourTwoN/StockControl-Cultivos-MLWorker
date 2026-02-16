@@ -97,6 +97,7 @@ def create_default_registry() -> ProcessorRegistry:
     from app.processors.detector_processor import DetectorProcessor
     from app.processors.estimator_processor import EstimatorProcessor
     from app.processors.segmentation_processor import SegmentationProcessor
+    from app.processors.sahi_detector_processor import SAHIDetectorProcessor
 
     registry = ProcessorRegistry()
 
@@ -105,6 +106,7 @@ def create_default_registry() -> ProcessorRegistry:
     registry.register("segmentation", SegmentationProcessor)
     registry.register("classification", ClassifierProcessor)
     registry.register("estimation", EstimatorProcessor)
+    registry.register("sahi_detection", SAHIDetectorProcessor)
 
     logger.info(
         "Default processor registry created",
