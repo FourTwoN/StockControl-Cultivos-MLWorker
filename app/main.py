@@ -17,6 +17,9 @@ from app.infra.logging import get_logger, setup_logging
 from app.ml.model_cache import ModelCache
 from app.core.industry_config import load_industry_config, get_config_loader
 from app.core.processor_registry import get_processor_registry
+from app.core.tenant_config import get_tenant_cache
+from app.infra.database import get_db_session
+from app.steps import register_all_steps
 
 # Import routers
 from app.api.routes.health import router as health_router
@@ -64,6 +67,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     registry = get_processor_registry()
     logger.info("Processor registry initialized", processors=registry.get_available())
 
+    # Register all pipeline steps
+    register_all_steps()
+    logger.info("Pipeline steps registered")
+
+    # Initialize tenant config cache
+    tenant_cache = get_tenant_cache()
+    try:
+        async with get_db_session() as session:
+            await tenant_cache.load_configs(session)
+        logger.info("Tenant configs loaded into cache")
+    except Exception as e:
+        logger.warning("Failed to load tenant configs", error=str(e))
+
     # Verify database connection
     db_ok = await verify_db_connection()
     if not db_ok:
@@ -82,6 +98,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Shutdown
     logger.info("ML Worker shutting down")
+
+    # Stop tenant config refresh loop
+    tenant_cache = get_tenant_cache()
+    await tenant_cache.stop()
+
     await close_db_engine()
     ModelCache.clear_cache()
     get_config_loader().clear_cache()
