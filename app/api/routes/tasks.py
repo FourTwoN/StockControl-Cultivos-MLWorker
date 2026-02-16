@@ -12,6 +12,9 @@ from fastapi import APIRouter, HTTPException, status
 from PIL import Image
 
 from app.api.deps import CloudTasksRequest, DbSession, Storage
+from app.core.processing_context import ProcessingContext
+from app.core.step_registry import StepRegistry
+from app.core.tenant_config import get_tenant_cache
 from app.infra.logging import get_logger
 from app.infra.storage import TenantPathError
 from app.schemas.task import (
@@ -135,6 +138,86 @@ async def process_task(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Processing failed: {e}",
         )
+
+
+@router.post(
+    "/v2/process",
+    response_model=ProcessingResponse,
+    summary="Process image through tenant-configured pipeline",
+)
+async def process_task_v2(
+    request: ProcessingRequest,
+    storage: Storage,
+    db: DbSession,
+    _: CloudTasksRequest,
+) -> ProcessingResponse:
+    """Process image using dynamic pipeline per tenant."""
+    start_time = time.time()
+    local_path: Path | None = None
+
+    try:
+        # Get tenant config from cache
+        config = await get_tenant_cache().get(request.tenant_id)
+        if not config:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No pipeline config for tenant: {request.tenant_id}",
+            )
+
+        # Download image
+        local_path = await storage.download_to_tempfile(
+            blob_path=request.image_url,
+            tenant_id=request.tenant_id,
+        )
+
+        # Build pipeline dynamically
+        steps = StepRegistry.build_pipeline(config.pipeline_steps)
+
+        # Create initial context
+        ctx = ProcessingContext(
+            tenant_id=request.tenant_id,
+            image_id=str(request.image_id),
+            session_id=str(request.session_id),
+            image_path=local_path,
+            config=config.settings,
+        )
+
+        # Execute pipeline
+        for step in steps:
+            ctx = await step.execute(ctx)
+
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        return ProcessingResponse(
+            success=True,
+            tenant_id=request.tenant_id,
+            session_id=request.session_id,
+            image_id=request.image_id,
+            pipeline=",".join(config.pipeline_steps),
+            results=ctx.results,
+            duration_ms=duration_ms,
+            steps_completed=len(config.pipeline_steps),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Pipeline execution failed", error=str(e), exc_info=True)
+        duration_ms = int((time.time() - start_time) * 1000)
+        return ProcessingResponse(
+            success=False,
+            tenant_id=request.tenant_id,
+            session_id=request.session_id,
+            image_id=request.image_id,
+            pipeline="",
+            results={},
+            duration_ms=duration_ms,
+            steps_completed=0,
+            error=str(e),
+        )
+    finally:
+        if local_path and local_path.exists():
+            local_path.unlink(missing_ok=True)
 
 
 @router.post(
