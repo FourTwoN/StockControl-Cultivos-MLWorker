@@ -1,0 +1,33 @@
+# =============================================================================
+# Example Terraform Variables
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values
+
+# Project
+project_id  = "your-gcp-project-id"
+region      = "us-central1"
+environment = "prod"  # or "staging"
+industry    = "agro"  # or "vending"
+
+# Database (reuse Backend's Cloud SQL)
+db_connection_name = "your-project:us-central1:demeter-db"
+db_name            = "demeter"
+db_user            = "demeter_app"
+db_password        = "your-secure-password"
+
+# Storage
+gcs_bucket = "demeter-images-prod"
+model_path = "gs://demeter-models/yolo"
+
+# Cloud Run (ML Worker needs more resources than Backend)
+cloudrun_cpu           = "4"
+cloudrun_memory        = "8Gi"
+cloudrun_min_instances = 0
+cloudrun_max_instances = 10
+
+# Cloud Tasks
+tasks_rate_limit = 10
+tasks_concurrent = 5
+
+# Set to true after first deployment
+mlworker_deployed = false

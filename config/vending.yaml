@@ -1,0 +1,110 @@
+# =============================================================================
+# Vending Industry Configuration
+# =============================================================================
+# ML configuration for vending/retail stock control (product detection, classification)
+
+industry: vending
+version: "1.0.0"
+
+# =============================================================================
+# Model Configuration
+# =============================================================================
+models:
+  detection:
+    path: detect.pt
+    confidence_threshold: 0.70
+    classes:
+      - product
+      - empty_shelf
+      - price_tag
+      - out_of_stock
+    enabled: true
+
+  segmentation:
+    path: segment.pt
+    confidence_threshold: 0.60
+    classes:
+      - shelf
+      - section
+      - cooler
+      - display
+    enabled: true
+
+  classification:
+    path: classify.pt
+    confidence_threshold: 0.75
+    classes:
+      # Beverages
+      - coca_cola
+      - pepsi
+      - sprite
+      - fanta
+      - water
+      - juice
+      # Snacks
+      - chips
+      - cookies
+      - candy
+      - chocolate
+      # Other
+      - unknown_product
+    enabled: true
+
+# =============================================================================
+# Pipeline Definitions
+# =============================================================================
+pipelines:
+  # Simple detection only
+  DETECTION:
+    steps:
+      - detection
+
+  # Detection + classification (identify products)
+  PRODUCT_IDENTIFICATION:
+    steps:
+      - detection
+      - classification
+
+  # Full analysis: segment → detect → classify → estimate
+  FULL_PIPELINE:
+    steps:
+      - segmentation
+      - detection
+      - classification
+      - estimation
+
+  # Shelf audit: find empty spaces and out-of-stock
+  SHELF_AUDIT:
+    steps:
+      - segmentation
+      - detection
+      - estimation
+
+  # Quick inventory check
+  INVENTORY_CHECK:
+    steps:
+      - detection
+      - classification
+      - estimation
+
+# =============================================================================
+# Industry-Specific Settings
+# =============================================================================
+settings:
+  # Default pipeline when not specified in request
+  default_pipeline: PRODUCT_IDENTIFICATION
+
+  # Maximum image size (pixels)
+  max_image_dimension: 4096
+
+  # Enable SAHI for large shelf images
+  use_sahi: true
+  sahi_slice_size: 640
+  sahi_overlap: 0.2
+
+  # Minimum area for valid detections (pixels^2)
+  min_detection_area: 50
+
+  # Group nearby detections of same class
+  enable_nms: true
+  nms_threshold: 0.5
