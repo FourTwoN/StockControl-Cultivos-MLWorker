@@ -10,7 +10,6 @@ from typing import Any
 
 import cv2
 import numpy as np
-from PIL import Image
 
 from app.core.pipeline_step import PipelineStep
 from app.core.processing_context import ProcessingContext
@@ -51,12 +50,23 @@ class SegmentFilterStep(PipelineStep):
             # Still generate crops for detection steps
             return await self._generate_crops(ctx)
 
-        if filter_type == "largest_claro":
-            filtered_segments = self._filter_largest_claro(ctx.raw_segments)
+        if filter_type == "largest_by_class":
+            # Get target classes from tenant config
+            target_classes = set(ctx.config.get("segment_filter_classes", []))
+            if not target_classes:
+                logger.warning(
+                    "No segment_filter_classes configured, skipping filter"
+                )
+                return await self._generate_crops(ctx)
+
+            filtered_segments = self._filter_largest_by_classes(
+                ctx.raw_segments, target_classes
+            )
             logger.info(
-                "Filtered segments using largest_claro",
+                "Filtered segments using largest_by_class",
                 original_count=len(ctx.raw_segments),
                 filtered_count=len(filtered_segments),
+                target_classes=list(target_classes),
             )
             ctx = ctx.with_segments(filtered_segments)
             # Generate crops for filtered segments
@@ -153,25 +163,30 @@ class SegmentFilterStep(PipelineStep):
 
         return crop_path
 
-    def _filter_largest_claro(
-        self, segments: list[dict[str, Any]]
+    def _filter_largest_by_classes(
+        self,
+        segments: list[dict[str, Any]],
+        target_classes: set[str],
     ) -> list[dict[str, Any]]:
-        """Filter to keep only largest segmento/claro-cajon.
+        """Filter to keep only largest segment of target classes.
 
-        Keeps the largest segment of type 'segmento' or 'claro-cajon',
-        and preserves all other segment types unchanged.
+        Keeps the largest segment matching any of the target class names,
+        and preserves all other segments unchanged.
 
         Args:
             segments: List of segment dictionaries
+            target_classes: Set of class names to filter (from tenant config)
 
         Returns:
             Filtered list of segments
         """
-        target_types = {"segmento", "claro-cajon"}
-
-        # Separate target segments from others
-        target_segments = [s for s in segments if s.get("type") in target_types]
-        other_segments = [s for s in segments if s.get("type") not in target_types]
+        # Separate target segments from others using class_name
+        target_segments = [
+            s for s in segments if s.get("class_name") in target_classes
+        ]
+        other_segments = [
+            s for s in segments if s.get("class_name") not in target_classes
+        ]
 
         if not target_segments:
             return segments

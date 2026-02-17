@@ -40,8 +40,8 @@ class TestSegmentFilterStep:
     ):
         """Test that missing filter type returns original segments."""
         segments = [
-            {"type": "segmento", "area": 100},
-            {"type": "claro-cajon", "area": 200},
+            {"class_name": "segmento", "area": 100},
+            {"class_name": "cajon", "area": 200},
         ]
         ctx = base_context.with_segments(segments)
 
@@ -50,87 +50,95 @@ class TestSegmentFilterStep:
         assert result_ctx.raw_segments == segments
 
     @pytest.mark.asyncio
-    async def test_largest_claro_filter_keeps_largest_segmento(
+    async def test_largest_by_class_filter_keeps_largest_segmento(
         self, step: SegmentFilterStep, base_context: ProcessingContext
     ):
-        """Test that largest_claro filter keeps only largest segmento."""
+        """Test that largest_by_class filter keeps only largest of target class."""
         segments = [
-            {"type": "segmento", "area": 100},
-            {"type": "segmento", "area": 300},
-            {"type": "segmento", "area": 200},
-            {"type": "other", "area": 50},
-        ]
-        ctx = base_context.with_segments(segments)
-        ctx = ProcessingContext(
-            tenant_id=ctx.tenant_id,
-            image_id=ctx.image_id,
-            session_id=ctx.session_id,
-            image_path=ctx.image_path,
-            config={"segment_filter_type": "largest_claro"},
-            raw_segments=segments,
-        )
-
-        result_ctx = await step.execute(ctx)
-
-        assert len(result_ctx.raw_segments) == 2
-        assert {"type": "segmento", "area": 300} in result_ctx.raw_segments
-        assert {"type": "other", "area": 50} in result_ctx.raw_segments
-
-    @pytest.mark.asyncio
-    async def test_largest_claro_filter_keeps_largest_claro_cajon(
-        self, step: SegmentFilterStep, base_context: ProcessingContext
-    ):
-        """Test that largest_claro filter keeps only largest claro-cajon."""
-        segments = [
-            {"type": "claro-cajon", "area": 100},
-            {"type": "claro-cajon", "area": 300},
-            {"type": "claro-cajon", "area": 200},
-            {"type": "other", "area": 50},
+            {"class_name": "segmento", "area": 100},
+            {"class_name": "segmento", "area": 300},
+            {"class_name": "segmento", "area": 200},
+            {"class_name": "other", "area": 50},
         ]
         ctx = ProcessingContext(
             tenant_id=base_context.tenant_id,
             image_id=base_context.image_id,
             session_id=base_context.session_id,
             image_path=base_context.image_path,
-            config={"segment_filter_type": "largest_claro"},
+            config={
+                "segment_filter_type": "largest_by_class",
+                "segment_filter_classes": ["segmento"],
+            },
             raw_segments=segments,
         )
 
         result_ctx = await step.execute(ctx)
 
         assert len(result_ctx.raw_segments) == 2
-        assert {"type": "claro-cajon", "area": 300} in result_ctx.raw_segments
-        assert {"type": "other", "area": 50} in result_ctx.raw_segments
+        assert {"class_name": "segmento", "area": 300} in result_ctx.raw_segments
+        assert {"class_name": "other", "area": 50} in result_ctx.raw_segments
 
     @pytest.mark.asyncio
-    async def test_largest_claro_filter_preserves_other_types(
+    async def test_largest_by_class_filter_keeps_largest_cajon(
         self, step: SegmentFilterStep, base_context: ProcessingContext
     ):
-        """Test that largest_claro filter preserves all non-target types."""
+        """Test that largest_by_class filter keeps only largest cajon."""
         segments = [
-            {"type": "segmento", "area": 100},
-            {"type": "segmento", "area": 300},
-            {"type": "bandeja", "area": 50},
-            {"type": "planta", "area": 75},
+            {"class_name": "cajon", "area": 100},
+            {"class_name": "cajon", "area": 300},
+            {"class_name": "cajon", "area": 200},
+            {"class_name": "other", "area": 50},
         ]
         ctx = ProcessingContext(
             tenant_id=base_context.tenant_id,
             image_id=base_context.image_id,
             session_id=base_context.session_id,
             image_path=base_context.image_path,
-            config={"segment_filter_type": "largest_claro"},
+            config={
+                "segment_filter_type": "largest_by_class",
+                "segment_filter_classes": ["cajon"],
+            },
+            raw_segments=segments,
+        )
+
+        result_ctx = await step.execute(ctx)
+
+        assert len(result_ctx.raw_segments) == 2
+        assert {"class_name": "cajon", "area": 300} in result_ctx.raw_segments
+        assert {"class_name": "other", "area": 50} in result_ctx.raw_segments
+
+    @pytest.mark.asyncio
+    async def test_largest_by_class_filter_preserves_other_classes(
+        self, step: SegmentFilterStep, base_context: ProcessingContext
+    ):
+        """Test that largest_by_class filter preserves all non-target classes."""
+        segments = [
+            {"class_name": "segmento", "area": 100},
+            {"class_name": "segmento", "area": 300},
+            {"class_name": "bandeja", "area": 50},
+            {"class_name": "planta", "area": 75},
+        ]
+        ctx = ProcessingContext(
+            tenant_id=base_context.tenant_id,
+            image_id=base_context.image_id,
+            session_id=base_context.session_id,
+            image_path=base_context.image_path,
+            config={
+                "segment_filter_type": "largest_by_class",
+                "segment_filter_classes": ["segmento"],
+            },
             raw_segments=segments,
         )
 
         result_ctx = await step.execute(ctx)
 
         assert len(result_ctx.raw_segments) == 3
-        assert {"type": "segmento", "area": 300} in result_ctx.raw_segments
-        assert {"type": "bandeja", "area": 50} in result_ctx.raw_segments
-        assert {"type": "planta", "area": 75} in result_ctx.raw_segments
+        assert {"class_name": "segmento", "area": 300} in result_ctx.raw_segments
+        assert {"class_name": "bandeja", "area": 50} in result_ctx.raw_segments
+        assert {"class_name": "planta", "area": 75} in result_ctx.raw_segments
 
     @pytest.mark.asyncio
-    async def test_largest_claro_filter_empty_segments(
+    async def test_largest_by_class_filter_empty_segments(
         self, step: SegmentFilterStep, base_context: ProcessingContext
     ):
         """Test that filter handles empty segments list."""
@@ -139,13 +147,46 @@ class TestSegmentFilterStep:
             image_id=base_context.image_id,
             session_id=base_context.session_id,
             image_path=base_context.image_path,
-            config={"segment_filter_type": "largest_claro"},
+            config={
+                "segment_filter_type": "largest_by_class",
+                "segment_filter_classes": ["segmento"],
+            },
             raw_segments=[],
         )
 
         result_ctx = await step.execute(ctx)
 
         assert result_ctx.raw_segments == []
+
+    @pytest.mark.asyncio
+    async def test_largest_by_class_filter_multiple_target_classes(
+        self, step: SegmentFilterStep, base_context: ProcessingContext
+    ):
+        """Test filter with multiple target classes keeps largest among all."""
+        segments = [
+            {"class_name": "segmento", "area": 100},
+            {"class_name": "cajon", "area": 300},
+            {"class_name": "segmento", "area": 200},
+            {"class_name": "other", "area": 50},
+        ]
+        ctx = ProcessingContext(
+            tenant_id=base_context.tenant_id,
+            image_id=base_context.image_id,
+            session_id=base_context.session_id,
+            image_path=base_context.image_path,
+            config={
+                "segment_filter_type": "largest_by_class",
+                "segment_filter_classes": ["segmento", "cajon"],
+            },
+            raw_segments=segments,
+        )
+
+        result_ctx = await step.execute(ctx)
+
+        # Should keep largest (cajon with area 300) + other
+        assert len(result_ctx.raw_segments) == 2
+        assert {"class_name": "cajon", "area": 300} in result_ctx.raw_segments
+        assert {"class_name": "other", "area": 50} in result_ctx.raw_segments
 
 
 class TestSizeCalculatorStep:
@@ -177,7 +218,7 @@ class TestSizeCalculatorStep:
             image_id=ctx.image_id,
             session_id=ctx.session_id,
             image_path=ctx.image_path,
-            config={"num_bands": 4, "image_height": 1000},
+            config={},
             raw_detections=detections,
         )
 
@@ -206,7 +247,7 @@ class TestSizeCalculatorStep:
             image_id=base_context.image_id,
             session_id=base_context.session_id,
             image_path=base_context.image_path,
-            config={"num_bands": 4, "image_height": 1000},
+            config={},
             raw_detections=detections,
         )
 
@@ -227,7 +268,7 @@ class TestSizeCalculatorStep:
             image_id=base_context.image_id,
             session_id=base_context.session_id,
             image_path=base_context.image_path,
-            config={"num_bands": 4, "image_height": 1000},
+            config={},
             raw_detections=[],
         )
 
@@ -246,7 +287,7 @@ class TestSizeCalculatorStep:
             image_id=base_context.image_id,
             session_id=base_context.session_id,
             image_path=base_context.image_path,
-            config={"num_bands": 4, "image_height": 1000},
+            config={},
             raw_detections=detections,
         )
 

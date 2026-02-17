@@ -49,10 +49,7 @@ class SizeCalculatorStep(PipelineStep):
             logger.debug("No detections to size")
             return ctx.with_results({"sizes": {}})
 
-        num_bands = ctx.config.get("num_bands", 1)
-        image_height = ctx.config.get("image_height", 1)
-
-        sizes = self._calculate_sizes(detections, num_bands, image_height)
+        sizes = self._calculate_sizes(detections)
 
         logger.info(
             "Calculated sizes for detections",
@@ -73,15 +70,11 @@ class SizeCalculatorStep(PipelineStep):
     def _calculate_sizes(
         self,
         detections: list[dict[str, Any]],
-        num_bands: int,
-        image_height: int,
     ) -> dict[int, int]:
         """Calculate size for each detection using z-scores.
 
         Args:
             detections: List of detection dictionaries with bbox
-            num_bands: Number of bands in image
-            image_height: Height of image in pixels
 
         Returns:
             Dictionary mapping detection index to size ID
@@ -110,14 +103,18 @@ class SizeCalculatorStep(PipelineStep):
 
         z_scores = [(area - mean_area) / std_dev for area in areas]
 
-        # Classify based on z-score thresholds
+        # Classify based on z-score thresholds (Demeter original values)
+        # z < -2.0: S (very small)
+        # -1.0 <= z <= 1.0: M (modal/medium)
+        # z > 2.0: XL (very large)
+        # L fills the gap between M and XL
         sizes = {}
         for idx, z_score in enumerate(z_scores):
-            if z_score < -0.5:
+            if z_score < -2.0:
                 sizes[idx] = SIZE_S
-            elif z_score < 0.5:
+            elif z_score <= 1.0:
                 sizes[idx] = SIZE_M
-            elif z_score < 1.5:
+            elif z_score <= 2.0:
                 sizes[idx] = SIZE_L
             else:
                 sizes[idx] = SIZE_XL
