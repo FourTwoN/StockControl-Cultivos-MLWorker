@@ -131,8 +131,7 @@ app/
 │   ├── base_processor.py
 │   ├── segmentation_processor.py
 │   ├── detector_processor.py
-│   ├── sahi_detector_processor.py
-│   └── classifier_processor.py
+│   └── sahi_detector_processor.py
 ├── infra/               # Infrastructure (DB, storage, logging)
 └── ml/                  # Model loading and caching
 ```

@@ -93,9 +93,7 @@ def create_default_registry() -> ProcessorRegistry:
     Returns:
         ProcessorRegistry with all standard processors
     """
-    from app.processors.classifier_processor import ClassifierProcessor
     from app.processors.detector_processor import DetectorProcessor
-    from app.processors.estimator_processor import EstimatorProcessor
     from app.processors.segmentation_processor import SegmentationProcessor
     from app.processors.sahi_detector_processor import SAHIDetectorProcessor
 
@@ -104,8 +102,6 @@ def create_default_registry() -> ProcessorRegistry:
     # Register all standard processors
     registry.register("detection", DetectorProcessor)
     registry.register("segmentation", SegmentationProcessor)
-    registry.register("classification", ClassifierProcessor)
-    registry.register("estimation", EstimatorProcessor)
     registry.register("sahi_detection", SAHIDetectorProcessor)
 
     logger.info(

@@ -133,5 +133,4 @@ class TestGetProcessorRegistry:
         # Should have the default processors registered
         assert "detection" in available
         assert "segmentation" in available
-        assert "classification" in available
-        assert "estimation" in available
+        assert "sahi_detection" in available

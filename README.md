@@ -215,8 +215,7 @@ StockControl-MLWorker/
 │   │   ├── base_processor.py           # Abstract base class
 │   │   ├── detector_processor.py       # YOLO detection
 │   │   ├── segmentation_processor.py   # YOLO segmentation
-│   │   ├── classifier_processor.py     # Classification
-│   │   └── estimator_processor.py      # Counting/estimation
+│   │   └── sahi_detector_processor.py  # SAHI tiled detection
 │   │
 │   ├── ml/                             # Model management
 │   │   ├── __init__.py
