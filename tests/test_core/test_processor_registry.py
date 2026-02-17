@@ -10,14 +10,13 @@ from app.core.processor_registry import (
     get_processor_registry,
     Processor,
 )
-from app.core.industry_config import ModelConfig
 
 
 class MockProcessor(Processor):
     """Mock processor for testing."""
 
-    def __init__(self, model_config: ModelConfig | None = None, **kwargs: Any):
-        self.model_config = model_config
+    def __init__(self, config: dict[str, Any] | None = None, **kwargs: Any):
+        self.config = config
         self.process_called = False
 
     async def process(
@@ -73,18 +72,18 @@ class TestProcessorRegistry:
 
         assert isinstance(processor, MockProcessor)
 
-    def test_get_processor_with_model_config(self, registry: ProcessorRegistry):
+    def test_get_processor_with_config(self, registry: ProcessorRegistry):
         registry.register("mock", MockProcessor)
 
-        model_config = ModelConfig(
-            path="test.pt",
-            confidence_threshold=0.8,
-        )
+        config = {
+            "path": "test.pt",
+            "confidence_threshold": 0.8,
+        }
 
-        processor = registry.get("mock", model_config=model_config)
+        processor = registry.get("mock", config=config)
 
         assert isinstance(processor, MockProcessor)
-        assert processor.model_config == model_config
+        assert processor.config == config
 
     def test_get_processor_caches_instance(self, registry: ProcessorRegistry):
         registry.register("mock", MockProcessor)

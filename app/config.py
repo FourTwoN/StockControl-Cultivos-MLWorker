@@ -101,6 +101,14 @@ class Settings(BaseSettings):
         default="demeter-images-dev",
         description="Cloud Storage bucket for images",
     )
+    use_local_storage: bool = Field(
+        default=False,
+        description="Use local filesystem instead of GCS (for development)",
+    )
+    local_storage_root: str = Field(
+        default="./local_storage",
+        description="Root directory for local storage when use_local_storage=True",
+    )
 
     # =========================================================================
     # ML Models

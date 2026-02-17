@@ -251,13 +251,121 @@ class StorageClient:
         logger.info("Deleted blob", blob_path=blob_path, tenant_id=tenant_id)
 
 
+class LocalStorageClient(StorageClient):
+    """Local filesystem storage client for testing without GCS.
+
+    Maps gs:// URLs to local filesystem paths.
+    Use LOCAL_STORAGE_ROOT env var to set the base directory.
+    """
+
+    def __init__(self, root_dir: str | Path | None = None) -> None:
+        """Initialize local storage client.
+
+        Args:
+            root_dir: Root directory for local storage. Defaults to ./local_storage
+        """
+        super().__init__()
+        self._root = Path(root_dir) if root_dir else Path("./local_storage")
+        self._root.mkdir(parents=True, exist_ok=True)
+        logger.info("Local storage client initialized", root=str(self._root))
+
+    async def download_to_tempfile(
+        self,
+        blob_path: str,
+        tenant_id: str,
+        suffix: str = ".jpg",
+    ) -> Path:
+        """Download from local filesystem instead of GCS.
+
+        The blob_path is mapped to: {root}/{blob_path}
+        For gs:// URLs, extracts the path portion.
+        """
+        # Handle gs:// URLs - extract just the path
+        if blob_path.startswith("gs://"):
+            _, blob_path = self.parse_gs_url(blob_path)
+
+        # Validate tenant path
+        self.validate_tenant_path(blob_path, tenant_id)
+
+        # Map to local path
+        local_source = self._root / blob_path
+
+        if not local_source.exists():
+            # Try without tenant prefix (for simpler test setups)
+            simple_path = self._root / Path(blob_path).name
+            if simple_path.exists():
+                local_source = simple_path
+            else:
+                raise FileNotFoundError(
+                    f"Local file not found: {local_source} or {simple_path}"
+                )
+
+        # Copy to temp file (simulates download)
+        import shutil
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        temp_path = Path(temp_file.name)
+        temp_file.close()
+
+        shutil.copy(local_source, temp_path)
+
+        logger.info(
+            "Local file copied to temp",
+            source=str(local_source),
+            temp_path=str(temp_path),
+            tenant_id=tenant_id,
+        )
+
+        return temp_path
+
+    async def upload_bytes(
+        self,
+        data: bytes | BinaryIO,
+        blob_path: str,
+        tenant_id: str,
+        content_type: str = "image/jpeg",
+    ) -> str:
+        """Upload to local filesystem instead of GCS."""
+        self.validate_tenant_path(blob_path, tenant_id)
+
+        local_dest = self._root / blob_path
+        local_dest.parent.mkdir(parents=True, exist_ok=True)
+
+        if isinstance(data, bytes):
+            local_dest.write_bytes(data)
+        else:
+            local_dest.write_bytes(data.read())
+
+        logger.info(
+            "Saved to local storage",
+            path=str(local_dest),
+            tenant_id=tenant_id,
+        )
+
+        return f"gs://local-bucket/{blob_path}"
+
+
 # Singleton instance
 _storage_client: StorageClient | None = None
 
 
 def get_storage_client() -> StorageClient:
-    """Get the singleton storage client."""
+    """Get the singleton storage client.
+
+    Returns LocalStorageClient in development mode,
+    regular StorageClient in production.
+    """
     global _storage_client
     if _storage_client is None:
-        _storage_client = StorageClient()
+        if settings.environment == "dev" and settings.use_local_storage:
+            _storage_client = LocalStorageClient(
+                root_dir=settings.local_storage_root
+            )
+        else:
+            _storage_client = StorageClient()
     return _storage_client
+
+
+def reset_storage_client() -> None:
+    """Reset the singleton (useful for testing)."""
+    global _storage_client
+    _storage_client = None

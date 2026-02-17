@@ -15,7 +15,6 @@ from app.config import settings
 from app.infra.database import close_db_engine, verify_db_connection
 from app.infra.logging import get_logger, setup_logging
 from app.ml.model_cache import ModelCache
-from app.core.industry_config import load_industry_config, get_config_loader
 from app.core.processor_registry import get_processor_registry
 from app.core.tenant_config import get_tenant_cache
 from app.infra.database import get_db_session
@@ -24,7 +23,6 @@ from app.steps import register_all_steps
 # Import routers
 from app.api.routes.health import router as health_router
 from app.api.routes.tasks import router as tasks_router
-from app.api.routes.upload import router as upload_router
 
 # Setup logging first
 setup_logging()
@@ -50,18 +48,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         environment=settings.environment,
         industry=settings.industry,
     )
-
-    # Load industry configuration
-    try:
-        config = await load_industry_config()
-        logger.info(
-            "Industry config loaded",
-            industry=config.industry,
-            version=config.version,
-            pipelines=config.get_available_pipelines(),
-        )
-    except Exception as e:
-        logger.warning("Failed to preload industry config", error=str(e))
 
     # Initialize processor registry
     registry = get_processor_registry()
@@ -105,7 +91,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await close_db_engine()
     ModelCache.clear_cache()
-    get_config_loader().clear_cache()
     get_processor_registry().clear_instances()
     logger.info("Cleanup complete")
 
@@ -198,7 +183,6 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 app.include_router(health_router, tags=["Health"])
 app.include_router(tasks_router, prefix="/tasks", tags=["Tasks"])
-app.include_router(upload_router, prefix="/dev", tags=["Development"])
 
 
 # =============================================================================
