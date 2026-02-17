@@ -9,12 +9,7 @@ from app.schemas.pipeline_definition import (
     PipelineElementDefinition,
     StepDefinition,
 )
-from app.schemas.task import (
-    ProcessingRequest,
-    ProcessingResponse,
-    CompressionRequest,
-    CompressionResponse,
-)
+from app.schemas.task import ProcessingRequest, ProcessingResponse
 
 __all__ = [
     "TaskResult",
@@ -22,8 +17,6 @@ __all__ = [
     "HealthResponse",
     "ProcessingRequest",
     "ProcessingResponse",
-    "CompressionRequest",
-    "CompressionResponse",
     "ChainDefinition",
     "ChordDefinition",
     "GroupDefinition",

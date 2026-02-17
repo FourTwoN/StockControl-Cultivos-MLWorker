@@ -4,12 +4,10 @@ Receives tasks from Cloud Tasks and routes them through the
 dynamic pipeline configured per tenant in the database.
 """
 
-import io
 import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
-from PIL import Image
 
 from app.api.deps import CloudTasksRequest, DbSession, Storage
 from app.core.pipeline_executor import PipelineExecutor
@@ -18,13 +16,7 @@ from app.core.processing_context import ProcessingContext
 from app.core.step_registry import StepRegistry
 from app.core.tenant_config import get_tenant_cache
 from app.infra.logging import get_logger
-from app.infra.storage import TenantPathError
-from app.schemas.task import (
-    CompressionRequest,
-    CompressionResponse,
-    ProcessingRequest,
-    ProcessingResponse,
-)
+from app.schemas.task import ProcessingRequest, ProcessingResponse
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -185,138 +177,3 @@ async def process_task(
                 "Temp file cleaned up",
                 path=str(local_path),
             )
-
-
-@router.post(
-    "/compress",
-    response_model=CompressionResponse,
-    summary="Compress image and generate thumbnails",
-    description="Generate thumbnails at specified sizes from a source image.",
-)
-async def compress_task(
-    request: CompressionRequest,
-    storage: Storage,
-    _: CloudTasksRequest,
-) -> CompressionResponse:
-    """Compress an image and generate thumbnails.
-
-    Args:
-        request: Compression request with source_url and target sizes
-        storage: Cloud Storage client
-        _: Cloud Tasks request validation
-
-    Returns:
-        CompressionResponse with thumbnail URLs
-    """
-    start_time = time.time()
-    local_path: Path | None = None
-
-    logger.info(
-        "Received compression task",
-        tenant_id=request.tenant_id,
-        image_id=str(request.image_id),
-        target_sizes=request.target_sizes,
-    )
-
-    try:
-        # Download source image
-        local_path = await storage.download_to_tempfile(
-            blob_path=request.source_url,
-            tenant_id=request.tenant_id,
-        )
-
-        # Open and process image
-        with Image.open(local_path) as img:
-            # Convert to RGB if necessary
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-
-            thumbnails: dict[int, str] = {}
-
-            for size in request.target_sizes:
-                # Create thumbnail
-                thumb = _create_thumbnail(img, size)
-
-                # Convert to bytes
-                buffer = io.BytesIO()
-                thumb.save(buffer, format="JPEG", quality=request.quality, optimize=True)
-                buffer.seek(0)
-
-                # Generate blob path
-                blob_path = (
-                    f"{request.tenant_id}/thumbnails/"
-                    f"{request.image_id}_{size}.jpg"
-                )
-
-                # Upload to GCS
-                url = await storage.upload_bytes(
-                    data=buffer.read(),
-                    blob_path=blob_path,
-                    tenant_id=request.tenant_id,
-                    content_type="image/jpeg",
-                )
-
-                thumbnails[size] = url
-
-        duration_ms = int((time.time() - start_time) * 1000)
-
-        logger.info(
-            "Compression completed",
-            tenant_id=request.tenant_id,
-            image_id=str(request.image_id),
-            thumbnails=len(thumbnails),
-            duration_ms=duration_ms,
-        )
-
-        return CompressionResponse(
-            success=True,
-            tenant_id=request.tenant_id,
-            image_id=request.image_id,
-            thumbnails=thumbnails,
-            duration_ms=duration_ms,
-        )
-
-    except TenantPathError as e:
-        logger.error(
-            "Tenant path validation failed",
-            tenant_id=request.tenant_id,
-            error=str(e),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Tenant validation failed: {e}",
-        )
-
-    except Exception as e:
-        logger.error(
-            "Compression failed",
-            tenant_id=request.tenant_id,
-            image_id=str(request.image_id),
-            error=str(e),
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Compression failed: {e}",
-        )
-
-    finally:
-        if local_path and local_path.exists():
-            try:
-                local_path.unlink()
-            except Exception:
-                pass
-
-
-def _create_thumbnail(img: Image.Image, max_size: int) -> Image.Image:
-    """Create a thumbnail maintaining aspect ratio."""
-    width, height = img.size
-
-    if width > height:
-        new_width = max_size
-        new_height = int(height * (max_size / width))
-    else:
-        new_height = max_size
-        new_width = int(width * (max_size / height))
-
-    return img.resize((new_width, new_height), Image.Resampling.LANCZOS)

@@ -18,17 +18,10 @@ Usage:
     python scripts/simulate_cloud_task.py \
         --image ./test_image.jpg \
         --species '[{"product_name": "Tomato", "product_id": 1}]'
-
-    # Test compression endpoint
-    python scripts/simulate_cloud_task.py \
-        --image ./test_image.jpg \
-        --endpoint compress \
-        --sizes 256,512,1024
 """
 
 import argparse
 import asyncio
-import base64
 import json
 import sys
 import uuid
@@ -129,73 +122,6 @@ async def send_process_request(
             return {"error": response.text, "status_code": response.status_code}
 
 
-async def send_compress_request(
-    base_url: str,
-    tenant_id: str,
-    image_path: Path,
-    sizes: list[int],
-    quality: int = 85,
-) -> dict:
-    """Send a simulated Cloud Tasks request to /tasks/compress.
-
-    Args:
-        base_url: ML Worker base URL
-        tenant_id: Tenant ID
-        image_path: Path to local image file
-        sizes: List of target thumbnail sizes
-        quality: JPEG quality (1-100)
-
-    Returns:
-        Response JSON from the ML Worker
-    """
-    task_id = str(uuid.uuid4())[:8]
-    image_id = str(uuid.uuid4())
-
-    headers = {
-        k: v.format(task_id=task_id)
-        for k, v in CLOUD_TASKS_HEADERS.items()
-    }
-    headers["Content-Type"] = "application/json"
-
-    fake_gcs_url = f"gs://test-bucket/{tenant_id}/originals/{image_path.name}"
-
-    payload = {
-        "tenant_id": tenant_id,
-        "image_id": image_id,
-        "source_url": fake_gcs_url,
-        "target_sizes": sizes,
-        "quality": quality,
-    }
-
-    print(f"\n{'='*60}")
-    print(f"Simulating Compress Task: {task_id}")
-    print(f"{'='*60}")
-    print(f"Tenant:    {tenant_id}")
-    print(f"Sizes:     {sizes}")
-    print(f"Quality:   {quality}")
-    print(f"Image:     {image_path}")
-    print(f"{'='*60}\n")
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            f"{base_url}/tasks/compress",
-            json=payload,
-            headers=headers,
-        )
-
-        print(f"Status: {response.status_code}")
-
-        if response.status_code == 200:
-            result = response.json()
-            print(f"Success: {result.get('success')}")
-            print(f"Duration: {result.get('duration_ms')}ms")
-            print(f"Thumbnails: {result.get('thumbnails')}")
-            return result
-        else:
-            print(f"Error: {response.text}")
-            return {"error": response.text, "status_code": response.status_code}
-
-
 async def check_health(base_url: str) -> bool:
     """Check if the ML Worker is running and healthy."""
     try:
@@ -232,39 +158,16 @@ def parse_args() -> argparse.Namespace:
         help="Tenant ID (default: test-tenant)",
     )
     parser.add_argument(
-        "--endpoint",
-        choices=["process", "compress"],
-        default="process",
-        help="Endpoint to test (default: process)",
-    )
-
-    # Process endpoint options
-    parser.add_argument(
         "--pipeline",
         default="DETECTION",
-        help="Pipeline name for process endpoint (default: DETECTION)",
+        help="Pipeline name (default: DETECTION)",
     )
     parser.add_argument(
         "--species",
         type=str,
         default=None,
-        help="Species config JSON for classification (e.g., '[{\"product_name\": \"Tomato\", \"product_id\": 1}]')",
+        help="Species config JSON (e.g., '[{\"product_name\": \"Tomato\", \"product_id\": 1}]')",
     )
-
-    # Compress endpoint options
-    parser.add_argument(
-        "--sizes",
-        default="256,512,1024",
-        help="Comma-separated thumbnail sizes for compress endpoint (default: 256,512,1024)",
-    )
-    parser.add_argument(
-        "--quality",
-        type=int,
-        default=85,
-        help="JPEG quality for compress endpoint (default: 85)",
-    )
-
-    # General options
     parser.add_argument(
         "--skip-health",
         action="store_true",
@@ -294,36 +197,27 @@ async def main() -> int:
         print(f"Checking ML Worker health at {args.url}...")
         if not await check_health(args.url):
             print("Error: ML Worker is not healthy or not running")
-            print(f"Make sure the server is running: uvicorn app.main:app --port 8080")
+            print("Make sure the server is running: uvicorn app.main:app --port 8080")
             return 1
         print("ML Worker is healthy!\n")
 
-    # Send request based on endpoint
-    if args.endpoint == "process":
-        species_config = None
-        if args.species:
-            try:
-                species_config = json.loads(args.species)
-            except json.JSONDecodeError as e:
-                print(f"Error parsing species config JSON: {e}")
-                return 1
+    # Parse species config if provided
+    species_config = None
+    if args.species:
+        try:
+            species_config = json.loads(args.species)
+        except json.JSONDecodeError as e:
+            print(f"Error parsing species config JSON: {e}")
+            return 1
 
-        result = await send_process_request(
-            base_url=args.url,
-            tenant_id=args.tenant,
-            image_path=args.image,
-            pipeline=args.pipeline,
-            species_config=species_config,
-        )
-    else:
-        sizes = [int(s.strip()) for s in args.sizes.split(",")]
-        result = await send_compress_request(
-            base_url=args.url,
-            tenant_id=args.tenant,
-            image_path=args.image,
-            sizes=sizes,
-            quality=args.quality,
-        )
+    # Send process request
+    result = await send_process_request(
+        base_url=args.url,
+        tenant_id=args.tenant,
+        image_path=args.image,
+        pipeline=args.pipeline,
+        species_config=species_config,
+    )
 
     # Save output if requested
     if args.output:
@@ -332,10 +226,10 @@ async def main() -> int:
 
     # Return exit code based on success
     if result.get("success"):
-        print("\n Task completed successfully!")
+        print("\nTask completed successfully!")
         return 0
     else:
-        print("\n Task failed!")
+        print("\nTask failed!")
         return 1
 
 
