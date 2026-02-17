@@ -12,13 +12,15 @@ from app.steps.post.segment_filter import SegmentFilterStep
 from app.steps.post.size_calculator import SizeCalculatorStep
 from app.steps.post.species_distributor import SpeciesDistributorStep
 from app.steps.post.aggregate_detections import AggregateDetectionsStep
+from app.steps.post.visualize_detections import VisualizeDetectionsStep
 
 
 def register_all_steps() -> None:
     """Register all available pipeline steps with the StepRegistry.
 
     Registers both ML steps (segmentation, detection, sahi_detection) and
-    post-processor steps (segment_filter, size_calculator, species_distributor).
+    post-processor steps (segment_filter, size_calculator, species_distributor,
+    visualize_detections).
 
     This function should be called during application startup to ensure all
     steps are available for pipeline construction.
@@ -33,6 +35,7 @@ def register_all_steps() -> None:
     StepRegistry.register("size_calculator", SizeCalculatorStep)
     StepRegistry.register("species_distributor", SpeciesDistributorStep)
     StepRegistry.register("aggregate_detections", AggregateDetectionsStep)
+    StepRegistry.register("visualize_detections", VisualizeDetectionsStep)
 
 
 __all__ = [
@@ -44,4 +47,5 @@ __all__ = [
     "SizeCalculatorStep",
     "SpeciesDistributorStep",
     "AggregateDetectionsStep",
+    "VisualizeDetectionsStep",
 ]

@@ -162,7 +162,7 @@ class TestSegmentFilterStep:
     async def test_largest_by_class_filter_multiple_target_classes(
         self, step: SegmentFilterStep, base_context: ProcessingContext
     ):
-        """Test filter with multiple target classes keeps largest among all."""
+        """Test filter with multiple target classes keeps largest of EACH class."""
         segments = [
             {"class_name": "segmento", "area": 100},
             {"class_name": "cajon", "area": 300},
@@ -183,9 +183,10 @@ class TestSegmentFilterStep:
 
         result_ctx = await step.execute(ctx)
 
-        # Should keep largest (cajon with area 300) + other
-        assert len(result_ctx.raw_segments) == 2
+        # Should keep largest of each target class + other
+        assert len(result_ctx.raw_segments) == 3
         assert {"class_name": "cajon", "area": 300} in result_ctx.raw_segments
+        assert {"class_name": "segmento", "area": 200} in result_ctx.raw_segments
         assert {"class_name": "other", "area": 50} in result_ctx.raw_segments
 
 

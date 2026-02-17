@@ -168,10 +168,10 @@ class SegmentFilterStep(PipelineStep):
         segments: list[dict[str, Any]],
         target_classes: set[str],
     ) -> list[dict[str, Any]]:
-        """Filter to keep only largest segment of target classes.
+        """Filter to keep only largest segment of EACH target class.
 
-        Keeps the largest segment matching any of the target class names,
-        and preserves all other segments unchanged.
+        For each target class, keeps only the largest segment of that class.
+        Preserves all segments of non-target classes unchanged.
 
         Args:
             segments: List of segment dictionaries
@@ -180,19 +180,25 @@ class SegmentFilterStep(PipelineStep):
         Returns:
             Filtered list of segments
         """
-        # Separate target segments from others using class_name
-        target_segments = [
-            s for s in segments if s.get("class_name") in target_classes
-        ]
-        other_segments = [
-            s for s in segments if s.get("class_name") not in target_classes
-        ]
+        # Group segments by class
+        by_class: dict[str, list[dict[str, Any]]] = {}
+        other_segments: list[dict[str, Any]] = []
 
-        if not target_segments:
-            return segments
+        for segment in segments:
+            class_name = segment.get("class_name", "")
+            if class_name in target_classes:
+                if class_name not in by_class:
+                    by_class[class_name] = []
+                by_class[class_name].append(segment)
+            else:
+                other_segments.append(segment)
 
-        # Find largest target segment by area
-        largest = max(target_segments, key=lambda s: s.get("area", 0))
+        # Keep largest of each target class
+        largest_per_class = []
+        for class_name, class_segments in by_class.items():
+            if class_segments:
+                largest = max(class_segments, key=lambda s: s.get("area", 0))
+                largest_per_class.append(largest)
 
-        # Return largest target + all other types
-        return [largest, *other_segments]
+        # Return largest of each target class + all other types
+        return [*largest_per_class, *other_segments]
