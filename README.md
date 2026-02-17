@@ -216,11 +216,23 @@ StockControl-MLWorker/
 │   ├── main.py                         # FastAPI app with lifespan
 │   ├── config.py                       # Pydantic Settings
 │   │
-│   ├── core/                           # Pipeline orchestration
+│   ├── core/                           # Core abstractions
 │   │   ├── __init__.py
-│   │   ├── pipeline.py                 # Pipeline orchestrator
-│   │   ├── processor_registry.py       # Dynamic processor loading
-│   │   └── industry_config.py          # Load config from GCS
+│   │   ├── pipeline_step.py            # PipelineStep ABC
+│   │   ├── processing_context.py       # Immutable context
+│   │   ├── step_registry.py            # Step registration
+│   │   ├── tenant_config.py            # Tenant config cache (DB)
+│   │   └── processor_registry.py       # ML processor registry
+│   │
+│   ├── steps/                          # Pipeline steps
+│   │   ├── ml/                         # ML step wrappers
+│   │   │   ├── segmentation_step.py
+│   │   │   ├── detection_step.py
+│   │   │   └── sahi_detection_step.py
+│   │   └── post/                       # Post-processors
+│   │       ├── segment_filter.py
+│   │       ├── size_calculator.py
+│   │       └── species_distributor.py
 │   │
 │   ├── processors/                     # ML processors (generic)
 │   │   ├── __init__.py
@@ -248,19 +260,11 @@ StockControl-MLWorker/
 │   │   ├── common.py                   # TaskResult, Error
 │   │   └── task.py                     # ProcessingRequest/Response
 │   │
-│   ├── services/                       # Business logic
-│   │   ├── __init__.py
-│   │   └── processing_service.py       # Orchestrate ML pipeline
-│   │
 │   └── infra/                          # Infrastructure adapters
 │       ├── __init__.py
 │       ├── database.py                 # Async SQLAlchemy + RLS
 │       ├── storage.py                  # GCS with tenant validation
 │       └── logging.py                  # structlog for Cloud Logging
-│
-├── config/                             # Local dev configs
-│   ├── agro.yaml
-│   └── vending.yaml
 │
 └── tests/
     ├── conftest.py
@@ -325,30 +329,31 @@ class DetectorProcessor:
 
 #### 4. Pipeline Orchestrator Pattern
 
-The `ProcessingService` orchestrates the pipeline:
+The endpoint orchestrates the pipeline directly using `TenantConfigCache` and `StepRegistry`:
 
 ```python
-async def process(self, request: ProcessingRequest) -> ProcessingResponse:
-    # 1. Load industry config
-    config = await self.load_industry_config(request.industry)
+async def process_task(request: ProcessingRequest, ...) -> ProcessingResponse:
+    # 1. Get tenant config from cache
+    config = await get_tenant_cache().get(request.tenant_id)
 
-    # 2. Get pipeline definition
-    pipeline = config.pipelines[request.pipeline]
+    # 2. Download image
+    local_path = await storage.download_to_tempfile(request.image_url, request.tenant_id)
 
-    # 3. Download image
-    local_path = await self.storage.download(request.image_url, request.tenant_id)
+    # 3. Build pipeline dynamically from tenant config
+    steps = StepRegistry.build_pipeline(config.pipeline_steps)
 
-    # 4. Execute pipeline steps
-    results = {}
-    for step in pipeline.steps:
-        processor = self.registry.get(step)
-        step_config = config.models.get(step, {})
-        results[step] = await processor.process(local_path, **step_config)
+    # 4. Create immutable context
+    ctx = ProcessingContext(
+        tenant_id=request.tenant_id,
+        image_path=local_path,
+        config=config.settings,
+    )
 
-    # 5. Save results
-    await self.save_results(request, results)
+    # 5. Execute pipeline steps
+    for step in steps:
+        ctx = await step.execute(ctx)
 
-    return ProcessingResponse(success=True, results=results)
+    return ProcessingResponse(success=True, results=ctx.results)
 ```
 
 ---

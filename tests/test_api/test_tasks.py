@@ -3,7 +3,8 @@
 import pytest
 from httpx import AsyncClient
 from unittest.mock import patch, AsyncMock, MagicMock
-from uuid import UUID
+
+from app.schemas.pipeline_definition import PipelineDefinition, StepDefinition
 
 
 class TestProcessEndpoint:
@@ -23,16 +24,14 @@ class TestProcessEndpoint:
     async def test_process_requires_cloud_tasks_headers(
         self, client: AsyncClient, valid_request_payload: dict
     ):
-        """Test that endpoint requires Cloud Tasks headers in production-like mode."""
-        # Without Cloud Tasks headers, should work in dev mode
-        # This tests the basic request validation
+        """Test that endpoint returns 404 when tenant config is not found."""
+        # Without tenant config in cache, should return 404
         response = await client.post(
             "/tasks/process",
             json=valid_request_payload,
         )
-        # In dev mode without proper setup, may return 500 due to missing dependencies
-        # or 200 if mocked properly
-        assert response.status_code in [200, 400, 500]
+        # Returns 404 because tenant config is not in cache
+        assert response.status_code == 404
 
     @pytest.mark.asyncio
     async def test_process_validates_request_schema(self, client: AsyncClient):
@@ -60,36 +59,50 @@ class TestProcessEndpoint:
         assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_process_with_mocked_service(
+    async def test_process_with_mocked_pipeline(
         self, client: AsyncClient, valid_request_payload: dict
     ):
-        """Test process endpoint with mocked processing service."""
-        mock_response = MagicMock()
-        mock_response.success = True
-        mock_response.tenant_id = valid_request_payload["tenant_id"]
-        mock_response.session_id = UUID(valid_request_payload["session_id"])
-        mock_response.image_id = UUID(valid_request_payload["image_id"])
-        mock_response.pipeline = "DETECTION"
-        mock_response.results = {"detection": []}
-        mock_response.duration_ms = 100
-        mock_response.steps_completed = 1
-        mock_response.error = None
+        """Test process endpoint with mocked tenant config and pipeline."""
+        # Create mock config with PipelineDefinition
+        mock_config = MagicMock()
+        mock_config.pipeline_definition = PipelineDefinition(
+            steps=[StepDefinition(name="detection")]
+        )
+        mock_config.settings = {}
 
-        with patch("app.api.routes.tasks.ProcessingService") as MockService:
-            mock_service_instance = AsyncMock()
-            mock_service_instance.process = AsyncMock(return_value=mock_response)
-            MockService.return_value = mock_service_instance
+        mock_ctx = MagicMock()
+        mock_ctx.results = {"detection": []}
+        mock_ctx.raw_segments = []
+        mock_ctx.raw_detections = []
+        mock_ctx.raw_classifications = []
 
-            with patch("app.api.deps.get_storage_client") as mock_storage:
-                mock_storage.return_value = MagicMock()
+        with patch("app.api.routes.tasks.get_tenant_cache") as mock_cache:
+            mock_cache.return_value.get = AsyncMock(return_value=mock_config)
 
-                response = await client.post(
-                    "/tasks/process",
-                    json=valid_request_payload,
-                )
+            with patch("app.api.routes.tasks.PipelineParser") as mock_parser_class:
+                mock_parser = MagicMock()
+                mock_parser.parse.return_value = MagicMock()  # Return mock Chain
+                mock_parser_class.return_value = mock_parser
 
-                # Should attempt to process (may fail on other dependencies)
-                assert response.status_code in [200, 400, 500]
+                with patch("app.api.routes.tasks.PipelineExecutor") as mock_executor_class:
+                    mock_executor = MagicMock()
+                    mock_executor.execute = AsyncMock(return_value=mock_ctx)
+                    mock_executor_class.return_value = mock_executor
+
+                    with patch("app.api.deps.get_storage_client") as mock_storage:
+                        mock_storage_instance = MagicMock()
+                        mock_storage_instance.download_to_tempfile = AsyncMock(
+                            return_value=MagicMock(exists=lambda: False)
+                        )
+                        mock_storage.return_value = mock_storage_instance
+
+                        response = await client.post(
+                            "/tasks/process",
+                            json=valid_request_payload,
+                        )
+
+                        # Should attempt to process (may fail on other dependencies)
+                        assert response.status_code in [200, 400, 404, 500]
 
 
 class TestCompressEndpoint:

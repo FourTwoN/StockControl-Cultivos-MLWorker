@@ -10,7 +10,6 @@ from httpx import AsyncClient, ASGITransport
 
 from app.main import app
 from app.config import settings
-from app.core.industry_config import IndustryConfig, ModelConfig, PipelineConfig
 
 
 @pytest.fixture
@@ -55,51 +54,6 @@ def sample_image_id() -> str:
 def sample_image_uuid() -> UUID:
     """Sample image UUID for testing."""
     return UUID("660e8400-e29b-41d4-a716-446655440001")
-
-
-@pytest.fixture
-def sample_industry_config() -> IndustryConfig:
-    """Create a sample industry config for testing."""
-    return IndustryConfig(
-        industry="test",
-        version="1.0.0",
-        models={
-            "detection": ModelConfig(
-                path="detect.pt",
-                confidence_threshold=0.8,
-                classes=["plant", "weed"],
-                enabled=True,
-            ),
-            "segmentation": ModelConfig(
-                path="segment.pt",
-                confidence_threshold=0.5,
-                classes=["field", "row"],
-                enabled=True,
-            ),
-            "classification": ModelConfig(
-                path="classify.pt",
-                confidence_threshold=0.7,
-                enabled=False,
-            ),
-            "estimation": ModelConfig(
-                path="estimate.pt",
-                confidence_threshold=0.6,
-                enabled=True,
-            ),
-        },
-        pipelines={
-            "DETECTION": PipelineConfig(steps=["detection"]),
-            "FULL_PIPELINE": PipelineConfig(
-                steps=["segmentation", "detection", "estimation"]
-            ),
-            "QUICK_COUNT": PipelineConfig(steps=["detection", "estimation"]),
-        },
-        settings={
-            "default_pipeline": "DETECTION",
-            "use_sahi": False,
-            "min_detection_area": 100,
-        },
-    )
 
 
 @pytest.fixture

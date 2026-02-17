@@ -27,6 +27,12 @@ class ProcessingContext:
     # Accumulated results from post-processors
     results: dict[str, Any] = field(default_factory=dict)
 
+    # Step-specific configuration (injected by executor)
+    step_config: dict[str, Any] = field(default_factory=dict)
+
+    # Cropped images for parallel detection (segment_idx -> crop_path)
+    segment_crops: dict[int, Path] = field(default_factory=dict)
+
     def with_segments(self, segments: list[dict[str, Any]]) -> "ProcessingContext":
         """Return new context with segments.
 
@@ -46,6 +52,8 @@ class ProcessingContext:
             raw_detections=self.raw_detections,
             raw_classifications=self.raw_classifications,
             results=self.results,
+            step_config=self.step_config,
+            segment_crops=self.segment_crops,
         )
 
     def with_detections(self, detections: list[dict[str, Any]]) -> "ProcessingContext":
@@ -67,6 +75,8 @@ class ProcessingContext:
             raw_detections=detections,
             raw_classifications=self.raw_classifications,
             results=self.results,
+            step_config=self.step_config,
+            segment_crops=self.segment_crops,
         )
 
     def with_classifications(
@@ -90,6 +100,8 @@ class ProcessingContext:
             raw_detections=self.raw_detections,
             raw_classifications=classifications,
             results=self.results,
+            step_config=self.step_config,
+            segment_crops=self.segment_crops,
         )
 
     def with_results(self, new_results: dict[str, Any]) -> "ProcessingContext":
@@ -111,4 +123,52 @@ class ProcessingContext:
             raw_detections=self.raw_detections,
             raw_classifications=self.raw_classifications,
             results={**self.results, **new_results},
+            step_config=self.step_config,
+            segment_crops=self.segment_crops,
+        )
+
+    def with_step_config(self, config: dict[str, Any]) -> "ProcessingContext":
+        """Return new context with step-specific configuration.
+
+        Args:
+            config: Step configuration to merge
+
+        Returns:
+            New ProcessingContext with merged step config
+        """
+        return ProcessingContext(
+            tenant_id=self.tenant_id,
+            image_id=self.image_id,
+            session_id=self.session_id,
+            image_path=self.image_path,
+            config=self.config,
+            raw_segments=self.raw_segments,
+            raw_detections=self.raw_detections,
+            raw_classifications=self.raw_classifications,
+            results=self.results,
+            step_config={**self.step_config, **config},
+            segment_crops=self.segment_crops,
+        )
+
+    def with_segment_crops(self, crops: dict[int, Path]) -> "ProcessingContext":
+        """Return new context with segment crop paths.
+
+        Args:
+            crops: Mapping of segment_idx to crop file path
+
+        Returns:
+            New ProcessingContext with segment crops
+        """
+        return ProcessingContext(
+            tenant_id=self.tenant_id,
+            image_id=self.image_id,
+            session_id=self.session_id,
+            image_path=self.image_path,
+            config=self.config,
+            raw_segments=self.raw_segments,
+            raw_detections=self.raw_detections,
+            raw_classifications=self.raw_classifications,
+            results=self.results,
+            step_config=self.step_config,
+            segment_crops={**self.segment_crops, **crops},
         )

@@ -1,7 +1,7 @@
 """Tests for TenantConfigCache."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +11,15 @@ from app.core.tenant_config import (
     TenantPipelineConfig,
     get_tenant_cache,
 )
+from app.schemas.pipeline_definition import PipelineDefinition, StepDefinition
+
+
+def make_pipeline_definition(step_names: list[str]) -> dict:
+    """Helper to create pipeline definition dict from step names."""
+    return {
+        "type": "chain",
+        "steps": [{"type": "step", "name": name} for name in step_names]
+    }
 
 
 class TestTenantPipelineConfig:
@@ -18,26 +27,41 @@ class TestTenantPipelineConfig:
 
     def test_tenant_pipeline_config_creation(self):
         """Test creating a TenantPipelineConfig instance."""
+        definition = PipelineDefinition(
+            steps=[
+                StepDefinition(name="detection"),
+                StepDefinition(name="estimation"),
+            ]
+        )
         config = TenantPipelineConfig(
             tenant_id="tenant-001",
-            pipeline_steps=["detection", "estimation"],
+            pipeline_definition=definition,
             settings={"confidence_threshold": 0.8},
         )
 
         assert config.tenant_id == "tenant-001"
-        assert config.pipeline_steps == ["detection", "estimation"]
+        assert len(config.pipeline_definition.steps) == 2
         assert config.settings == {"confidence_threshold": 0.8}
 
     def test_tenant_pipeline_config_immutability(self):
         """Test that TenantPipelineConfig is immutable."""
+        definition = PipelineDefinition(steps=[StepDefinition(name="detection")])
         config = TenantPipelineConfig(
             tenant_id="tenant-001",
-            pipeline_steps=["detection"],
+            pipeline_definition=definition,
             settings={},
         )
 
         with pytest.raises(AttributeError):
             config.tenant_id = "tenant-002"  # type: ignore[misc]
+
+
+class MockStepRegistry:
+    """Mock registry that accepts any step name."""
+
+    @classmethod
+    def available_steps(cls) -> list[str]:
+        return ["detection", "estimation", "segmentation"]
 
 
 class TestTenantConfigCache:
@@ -49,6 +73,15 @@ class TestTenantConfigCache:
         session = AsyncMock(spec=AsyncSession)
         return session
 
+    @pytest.fixture
+    def mock_parser(self):
+        """Create a mock parser that doesn't validate steps."""
+        with patch("app.core.tenant_config.TenantConfigCache._get_parser") as mock:
+            parser = MagicMock()
+            parser.parse = MagicMock(return_value=MagicMock())  # Return a dummy Chain
+            mock.return_value = parser
+            yield mock
+
     @pytest.mark.asyncio
     async def test_cache_initialization(self):
         """Test cache initializes with empty data."""
@@ -59,14 +92,18 @@ class TestTenantConfigCache:
         assert cache._refresh_task is None
 
     @pytest.mark.asyncio
-    async def test_get_existing_tenant(self, mock_db_session: AsyncSession):
+    async def test_get_existing_tenant(self, mock_db_session: AsyncSession, mock_parser):
         """Test retrieving an existing tenant config from cache."""
         cache = TenantConfigCache()
 
         # Load configs into cache
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [
-            ("tenant-001", ["detection", "estimation"], {"threshold": 0.8})
+            (
+                "tenant-001",
+                make_pipeline_definition(["detection", "estimation"]),
+                {"threshold": 0.8}
+            )
         ]
         mock_db_session.execute = AsyncMock(return_value=mock_result)
 
@@ -77,7 +114,7 @@ class TestTenantConfigCache:
 
         assert config is not None
         assert config.tenant_id == "tenant-001"
-        assert config.pipeline_steps == ["detection", "estimation"]
+        assert len(config.pipeline_definition.steps) == 2
         assert config.settings == {"threshold": 0.8}
 
     @pytest.mark.asyncio
@@ -90,15 +127,15 @@ class TestTenantConfigCache:
         assert config is None
 
     @pytest.mark.asyncio
-    async def test_load_configs_from_db(self, mock_db_session: AsyncSession):
+    async def test_load_configs_from_db(self, mock_db_session: AsyncSession, mock_parser):
         """Test loading configs from database."""
         cache = TenantConfigCache()
 
         # Mock database result
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [
-            ("tenant-001", ["detection"], {"conf": 0.7}),
-            ("tenant-002", ["detection", "estimation"], {"conf": 0.9}),
+            ("tenant-001", make_pipeline_definition(["detection"]), {"conf": 0.7}),
+            ("tenant-002", make_pipeline_definition(["detection", "estimation"]), {"conf": 0.9}),
         ]
         mock_db_session.execute = AsyncMock(return_value=mock_result)
 
@@ -110,14 +147,14 @@ class TestTenantConfigCache:
 
         assert config1 is not None
         assert config1.tenant_id == "tenant-001"
-        assert config1.pipeline_steps == ["detection"]
+        assert len(config1.pipeline_definition.steps) == 1
 
         assert config2 is not None
         assert config2.tenant_id == "tenant-002"
-        assert config2.pipeline_steps == ["detection", "estimation"]
+        assert len(config2.pipeline_definition.steps) == 2
 
     @pytest.mark.asyncio
-    async def test_load_configs_with_empty_result(self, mock_db_session: AsyncSession):
+    async def test_load_configs_with_empty_result(self, mock_db_session: AsyncSession, mock_parser):
         """Test loading configs when database returns no rows."""
         cache = TenantConfigCache()
 
@@ -133,29 +170,26 @@ class TestTenantConfigCache:
         assert config is None
 
     @pytest.mark.asyncio
-    async def test_load_configs_handles_db_error(self, mock_db_session: AsyncSession):
-        """Test that load_configs handles database errors gracefully."""
+    async def test_load_configs_handles_db_error(self, mock_db_session: AsyncSession, mock_parser):
+        """Test that load_configs raises on database errors (fail-fast)."""
         cache = TenantConfigCache()
 
         # Mock database error
         mock_db_session.execute = AsyncMock(side_effect=Exception("DB connection error"))
 
-        # Should not raise, but log error
-        await cache.load_configs(mock_db_session)
-
-        # Cache should remain empty
-        config = await cache.get("tenant-001")
-        assert config is None
+        # Should raise (fail-fast behavior)
+        with pytest.raises(Exception, match="DB connection error"):
+            await cache.load_configs(mock_db_session)
 
     @pytest.mark.asyncio
-    async def test_start_refresh_loop(self, mock_db_session: AsyncSession):
+    async def test_start_refresh_loop(self, mock_db_session: AsyncSession, mock_parser):
         """Test starting the refresh loop."""
-        cache = TenantConfigCache(refresh_interval_seconds=1)
+        cache = TenantConfigCache(refresh_interval_seconds=0.2)
 
         # Mock database result
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [
-            ("tenant-001", ["detection"], {"conf": 0.8})
+            ("tenant-001", make_pipeline_definition(["detection"]), {"conf": 0.8})
         ]
         mock_db_session.execute = AsyncMock(return_value=mock_result)
 
@@ -180,7 +214,7 @@ class TestTenantConfigCache:
         await cache.stop()
 
     @pytest.mark.asyncio
-    async def test_stop_cancels_refresh_task(self):
+    async def test_stop_cancels_refresh_task(self, mock_parser):
         """Test that stop cancels the refresh task."""
         cache = TenantConfigCache(refresh_interval_seconds=100)
 
@@ -211,7 +245,7 @@ class TestTenantConfigCache:
         assert cache._refresh_task is None
 
     @pytest.mark.asyncio
-    async def test_refresh_loop_periodic_reload(self, mock_db_session: AsyncSession):
+    async def test_refresh_loop_periodic_reload(self, mock_db_session: AsyncSession, mock_parser):
         """Test that refresh loop reloads configs periodically."""
         cache = TenantConfigCache(refresh_interval_seconds=0.2)
 
@@ -228,7 +262,7 @@ class TestTenantConfigCache:
             mock_session = AsyncMock(spec=AsyncSession)
             mock_result = MagicMock()
             mock_result.fetchall.return_value = [
-                ("tenant-001", ["detection"], {"count": call_count})
+                ("tenant-001", make_pipeline_definition(["detection"]), {"count": call_count})
             ]
             mock_session.execute = AsyncMock(return_value=mock_result)
             yield mock_session
@@ -244,14 +278,14 @@ class TestTenantConfigCache:
         await cache.stop()
 
     @pytest.mark.asyncio
-    async def test_concurrent_get_operations(self, mock_db_session: AsyncSession):
+    async def test_concurrent_get_operations(self, mock_db_session: AsyncSession, mock_parser):
         """Test that concurrent get operations are thread-safe."""
         cache = TenantConfigCache()
 
         # Load initial config
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [
-            ("tenant-001", ["detection"], {"conf": 0.8})
+            ("tenant-001", make_pipeline_definition(["detection"]), {"conf": 0.8})
         ]
         mock_db_session.execute = AsyncMock(return_value=mock_result)
 

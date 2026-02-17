@@ -1,7 +1,7 @@
 """Unified task endpoint for all ML processing.
 
 Receives tasks from Cloud Tasks and routes them through the
-appropriate pipeline based on the request.
+dynamic pipeline configured per tenant in the database.
 """
 
 import io
@@ -12,6 +12,8 @@ from fastapi import APIRouter, HTTPException, status
 from PIL import Image
 
 from app.api.deps import CloudTasksRequest, DbSession, Storage
+from app.core.pipeline_executor import PipelineExecutor
+from app.core.pipeline_parser import PipelineParser
 from app.core.processing_context import ProcessingContext
 from app.core.step_registry import StepRegistry
 from app.core.tenant_config import get_tenant_cache
@@ -23,8 +25,6 @@ from app.schemas.task import (
     ProcessingRequest,
     ProcessingResponse,
 )
-from app.services.agro_processing_service import AgroProcessingService
-from app.services.processing_service import ProcessingService
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -33,130 +33,24 @@ logger = get_logger(__name__)
 @router.post(
     "/process",
     response_model=ProcessingResponse,
-    summary="Process image through ML pipeline",
-    description="""
-    Unified endpoint for all ML processing tasks.
-
-    The `pipeline` field determines which processors run:
-    - `DETECTION`: Run detection only
-    - `SEGMENTATION`: Run segmentation only
-    - `FULL_PIPELINE`: Run segmentation → detection → estimation
-    - Custom pipelines defined in industry config
-
-    Available pipelines depend on the industry configuration.
-    """,
-)
-async def process_task(
-    request: ProcessingRequest,
-    storage: Storage,
-    _: CloudTasksRequest,
-) -> ProcessingResponse:
-    """Process an image through the configured ML pipeline.
-
-    This endpoint is called by Cloud Tasks with the processing request.
-    It downloads the image, executes the requested pipeline, and saves
-    results to the database.
-
-    Args:
-        request: Processing request with tenant_id, image_url, pipeline, etc.
-        storage: Cloud Storage client
-        _: Cloud Tasks request validation
-
-    Returns:
-        ProcessingResponse with pipeline results
-
-    Raises:
-        HTTPException 400: If tenant validation fails or pipeline not found
-        HTTPException 500: If processing fails (Cloud Tasks will retry)
-    """
-    logger.info(
-        "Received processing task",
-        tenant_id=request.tenant_id,
-        session_id=str(request.session_id),
-        image_id=str(request.image_id),
-        pipeline=request.pipeline,
-    )
-
-    try:
-        # Create processing service (results sent to backend via HTTP callback)
-        service = ProcessingService(storage_client=storage)
-
-        response = await service.process(request)
-
-        if response.success:
-            logger.info(
-                "Processing completed",
-                tenant_id=request.tenant_id,
-                image_id=str(request.image_id),
-                pipeline=request.pipeline,
-                duration_ms=response.duration_ms,
-                steps_completed=response.steps_completed,
-            )
-        else:
-            logger.warning(
-                "Processing failed",
-                tenant_id=request.tenant_id,
-                image_id=str(request.image_id),
-                pipeline=request.pipeline,
-                error=response.error,
-            )
-
-        return response
-
-    except TenantPathError as e:
-        logger.error(
-            "Tenant path validation failed",
-            tenant_id=request.tenant_id,
-            error=str(e),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Tenant validation failed: {e}",
-        )
-
-    except ValueError as e:
-        # Pipeline not found or invalid configuration
-        logger.error(
-            "Invalid request",
-            tenant_id=request.tenant_id,
-            error=str(e),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-
-    except Exception as e:
-        logger.error(
-            "Processing error",
-            tenant_id=request.tenant_id,
-            image_id=str(request.image_id),
-            error=str(e),
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Processing failed: {e}",
-        )
-
-
-@router.post(
-    "/v2/process",
-    response_model=ProcessingResponse,
     summary="Process image through tenant-configured pipeline",
 )
-async def process_task_v2(
+async def process_task(
     request: ProcessingRequest,
     storage: Storage,
     db: DbSession,
     _: CloudTasksRequest,
 ) -> ProcessingResponse:
-    """Process image using dynamic pipeline per tenant."""
+    """Process image using dynamic pipeline per tenant.
+
+    The pipeline is defined in tenant_config.pipeline_definition (JSONB)
+    and supports full DSL composition: chain, group, chord for parallel execution.
+    """
     start_time = time.time()
     local_path: Path | None = None
 
     try:
-        # Get tenant config from cache
+        # Get tenant config from cache (already validated at load time)
         config = await get_tenant_cache().get(request.tenant_id)
         if not config:
             raise HTTPException(
@@ -170,9 +64,6 @@ async def process_task_v2(
             tenant_id=request.tenant_id,
         )
 
-        # Build pipeline dynamically
-        steps = StepRegistry.build_pipeline(config.pipeline_steps)
-
         # Create initial context
         ctx = ProcessingContext(
             tenant_id=request.tenant_id,
@@ -182,21 +73,33 @@ async def process_task_v2(
             config=config.settings,
         )
 
-        # Execute pipeline
-        for step in steps:
-            ctx = await step.execute(ctx)
+        # Parse pipeline definition to DSL structures
+        parser = PipelineParser(StepRegistry)
+        pipeline = parser.parse(config.pipeline_definition)
+
+        # Execute pipeline (always uses executor, supports parallelism)
+        executor = PipelineExecutor()
+        ctx = await executor.execute(pipeline, ctx)
 
         duration_ms = int((time.time() - start_time) * 1000)
+
+        # Build complete results including raw ML data
+        full_results = {
+            **ctx.results,
+            "segments": ctx.raw_segments,
+            "detections": ctx.raw_detections,
+            "classifications_raw": ctx.raw_classifications,
+        }
 
         return ProcessingResponse(
             success=True,
             tenant_id=request.tenant_id,
             session_id=request.session_id,
             image_id=request.image_id,
-            pipeline=",".join(config.pipeline_steps),
-            results=ctx.results,
+            pipeline=config.pipeline_definition.model_dump_json(),
+            results=full_results,
             duration_ms=duration_ms,
-            steps_completed=len(config.pipeline_steps),
+            steps_completed=len(config.pipeline_definition.steps),
         )
 
     except HTTPException:
@@ -218,106 +121,6 @@ async def process_task_v2(
     finally:
         if local_path and local_path.exists():
             local_path.unlink(missing_ok=True)
-
-
-@router.post(
-    "/agro/process",
-    response_model=ProcessingResponse,
-    summary="Process image through Agro ML pipeline",
-    description="""
-    Agro-specific endpoint for plant detection and classification.
-
-    Pipeline steps:
-    1. Segmentation - Detect containers (cajon, segmento)
-    2. Segment filtering - Keep only largest "claro" segment
-    3. Detection - Standard YOLO for cajon, SAHI for large segments
-    4. Coordinate transformation - Segment-relative to full-image coords
-    5. Classification - Species distribution + size calculation
-    6. DB persistence - INSERT detections, classifications
-
-    Requires `species_config` in request payload for classification.
-    """,
-)
-async def process_agro_task(
-    request: ProcessingRequest,
-    storage: Storage,
-    db: DbSession,
-    _: CloudTasksRequest,
-) -> ProcessingResponse:
-    """Process an image through the Agro ML pipeline.
-
-    This endpoint handles agricultural plant detection with:
-    - SAHI tiled detection for large segments (>1M pixels)
-    - Equitable species distribution classification
-    - Direct DB persistence (no HTTP callback)
-
-    Args:
-        request: Processing request with species_config for classification
-        storage: Cloud Storage client
-        db: Async database session with RLS context
-        _: Cloud Tasks request validation
-
-    Returns:
-        ProcessingResponse with detection/classification results
-    """
-    logger.info(
-        "Received agro processing task",
-        tenant_id=request.tenant_id,
-        session_id=str(request.session_id),
-        image_id=str(request.image_id),
-        pipeline=request.pipeline,
-        has_species_config=request.species_config is not None,
-    )
-
-    try:
-        service = AgroProcessingService(
-            storage_client=storage,
-            db_session=db,
-        )
-
-        response = await service.process(request)
-
-        if response.success:
-            logger.info(
-                "Agro processing completed",
-                tenant_id=request.tenant_id,
-                image_id=str(request.image_id),
-                duration_ms=response.duration_ms,
-                detections=response.results.get("total_detected", 0),
-            )
-        else:
-            logger.warning(
-                "Agro processing failed",
-                tenant_id=request.tenant_id,
-                image_id=str(request.image_id),
-                error=response.error,
-            )
-
-        return response
-
-    except TenantPathError as e:
-        logger.error(
-            "Tenant path validation failed",
-            tenant_id=request.tenant_id,
-            error=str(e),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Tenant validation failed: {e}",
-        )
-
-    except Exception as e:
-        logger.error(
-            "Agro processing error",
-            tenant_id=request.tenant_id,
-            image_id=str(request.image_id),
-            error=str(e),
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Agro processing failed: {e}",
-        )
 
 
 @router.post(

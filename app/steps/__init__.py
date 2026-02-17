@@ -11,6 +11,7 @@ from app.steps.ml.sahi_detection_step import SAHIDetectionStep
 from app.steps.post.segment_filter import SegmentFilterStep
 from app.steps.post.size_calculator import SizeCalculatorStep
 from app.steps.post.species_distributor import SpeciesDistributorStep
+from app.steps.post.aggregate_detections import AggregateDetectionsStep
 
 
 def register_all_steps() -> None:
@@ -31,6 +32,7 @@ def register_all_steps() -> None:
     StepRegistry.register("segment_filter", SegmentFilterStep)
     StepRegistry.register("size_calculator", SizeCalculatorStep)
     StepRegistry.register("species_distributor", SpeciesDistributorStep)
+    StepRegistry.register("aggregate_detections", AggregateDetectionsStep)
 
 
 __all__ = [
@@ -41,4 +43,5 @@ __all__ = [
     "SegmentFilterStep",
     "SizeCalculatorStep",
     "SpeciesDistributorStep",
+    "AggregateDetectionsStep",
 ]

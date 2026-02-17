@@ -2,18 +2,27 @@
 
 This module provides in-memory caching of tenant pipeline configurations
 loaded from the database, with automatic periodic refresh.
+
+Pipeline definitions are stored as JSONB in the database and validated
+at load time using Pydantic schemas and PipelineParser.
 """
+
+from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.logging import get_logger
+from app.schemas.pipeline_definition import PipelineDefinition
+
+if TYPE_CHECKING:
+    from app.core.pipeline_parser import PipelineParser
 
 logger = get_logger(__name__)
 
@@ -24,12 +33,12 @@ class TenantPipelineConfig:
 
     Attributes:
         tenant_id: Unique tenant identifier
-        pipeline_steps: List of pipeline step names to execute
+        pipeline_definition: DSL pipeline definition (validated at load time)
         settings: Additional configuration settings for the tenant
     """
 
     tenant_id: str
-    pipeline_steps: list[str]
+    pipeline_definition: PipelineDefinition
     settings: dict[str, Any]
 
 
@@ -38,23 +47,47 @@ class TenantConfigCache:
 
     Loads configurations from database and refreshes periodically.
     Thread-safe for concurrent access.
+
+    Validates pipeline definitions at load time using PipelineParser
+    to ensure all referenced steps exist in StepRegistry (fail-fast).
     """
 
-    def __init__(self, refresh_interval_seconds: int = 300) -> None:
+    def __init__(
+        self,
+        refresh_interval_seconds: float = 300,
+        parser: PipelineParser | None = None,
+    ) -> None:
         """Initialize the tenant config cache.
 
         Args:
             refresh_interval_seconds: Interval between cache refreshes (default: 5 minutes)
+            parser: Optional PipelineParser for validation (created lazily if not provided)
         """
         self._cache: dict[str, TenantPipelineConfig] = {}
         self._refresh_interval = refresh_interval_seconds
         self._lock = asyncio.Lock()
         self._refresh_task: asyncio.Task[None] | None = None
+        self._parser = parser
 
         logger.info(
             "TenantConfigCache initialized",
             refresh_interval_seconds=refresh_interval_seconds,
         )
+
+    def _get_parser(self) -> PipelineParser:
+        """Get or create the pipeline parser.
+
+        Lazy initialization to avoid circular imports.
+
+        Returns:
+            PipelineParser instance
+        """
+        if self._parser is None:
+            from app.core.pipeline_parser import PipelineParser
+            from app.core.step_registry import StepRegistry
+
+            self._parser = PipelineParser(StepRegistry)
+        return self._parser
 
     async def get(self, tenant_id: str) -> TenantPipelineConfig | None:
         """Get tenant configuration from cache.
@@ -78,28 +111,49 @@ class TenantConfigCache:
     async def load_configs(self, db_session: AsyncSession) -> None:
         """Load all tenant configurations from database.
 
+        Validates each pipeline definition at load time:
+        1. Pydantic validates JSON structure
+        2. PipelineParser validates all steps exist in registry
+
         Args:
             db_session: Active database session
+
+        Raises:
+            Exception: If any tenant config is invalid (fail-fast)
         """
         try:
             logger.info("Loading tenant configurations from database")
 
             query = text(
-                "SELECT tenant_id, pipeline_steps, settings FROM tenant_config"
+                "SELECT tenant_id, pipeline_definition, settings FROM tenant_config"
             )
             result = await db_session.execute(query)
             rows = result.fetchall()
 
             new_cache: dict[str, TenantPipelineConfig] = {}
+            parser = self._get_parser()
 
             for row in rows:
-                tenant_id, pipeline_steps, settings = row
+                tenant_id, pipeline_definition_json, settings = row
+
+                # Validate JSON structure with Pydantic
+                definition = PipelineDefinition.model_validate(pipeline_definition_json)
+
+                # Validate all steps exist in registry (fail-fast)
+                parser.parse(definition)
+
                 config = TenantPipelineConfig(
                     tenant_id=tenant_id,
-                    pipeline_steps=pipeline_steps,
+                    pipeline_definition=definition,
                     settings=settings or {},
                 )
                 new_cache[tenant_id] = config
+
+                logger.debug(
+                    "Validated tenant config",
+                    tenant_id=tenant_id,
+                    steps_count=len(definition.steps),
+                )
 
             async with self._lock:
                 self._cache = new_cache
@@ -116,6 +170,7 @@ class TenantConfigCache:
                 error=str(e),
                 exc_info=True,
             )
+            raise
 
     async def start_refresh_loop(
         self,
