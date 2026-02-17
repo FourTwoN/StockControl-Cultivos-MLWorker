@@ -96,6 +96,8 @@ deploy/terraform/.terraform.lock.hcl
 tmp/
 temp/
 .tmp/
+result.json
+local_storage/
 
 # =============================================================================
 # OS
