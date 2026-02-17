@@ -41,6 +41,8 @@ All steps implement `PipelineStep` interface and can be composed in any order:
 - `aggregate_detections` - Merge detections from parallel branches (chord callback)
 - `size_calculator` - Calculate sizes with z-scores (thresholds: S < -2σ, M ≤ 1σ, L ≤ 2σ, XL > 2σ)
 - `species_distributor` - Distribute detections across species
+- `visualize_detections` - Draw detection boxes on image
+- `upload_image` - Upload image to GCS with thumbnail generation (reusable for original/processed)
 
 ### Pipeline DSL (Celery Canvas-inspired)
 
@@ -58,6 +60,9 @@ The system uses a serializable DSL stored as JSONB in the database. Supports:
   "pipeline_definition": {
     "type": "chain",
     "steps": [
+      {"type": "step", "name": "upload_image", "kwargs": {
+        "source": "original", "dest_prefix": "originals", "thumbnail_sizes": [256, 512, 1024]
+      }},
       {"type": "step", "name": "segmentation"},
       {"type": "step", "name": "segment_filter"},
       {
@@ -72,7 +77,10 @@ The system uses a serializable DSL stored as JSONB in the database. Supports:
         "callback": {"type": "step", "name": "aggregate_detections"}
       },
       {"type": "step", "name": "size_calculator"},
-      {"type": "step", "name": "species_distributor"}
+      {"type": "step", "name": "visualize_detections"},
+      {"type": "step", "name": "upload_image", "kwargs": {
+        "source": "processed", "dest_prefix": "processed", "thumbnail_sizes": [256, 512]
+      }}
     ]
   },
   "settings": {
@@ -81,6 +89,25 @@ The system uses a serializable DSL stored as JSONB in the database. Supports:
     "species": ["species_a", "species_b"]
   }
 }
+```
+
+**`upload_image` step kwargs:**
+| Param | Description | Default |
+|-------|-------------|---------|
+| `source` | `"original"` or `"processed"` | `"original"` |
+| `dest_prefix` | GCS folder (e.g., `"originals"`, `"processed"`) | `"images"` |
+| `thumbnail_sizes` | List of thumbnail sizes in pixels | `[256, 512]` |
+| `quality` | JPEG quality 1-100 | `85` |
+| `skip_if_missing` | Don't fail if source missing | `false` |
+
+**GCS structure after upload:**
+```
+gs://{bucket}/{tenant_id}/
+├── originals/{image_id}.jpg
+├── originals_thumbnails/{image_id}_256.jpg
+├── originals_thumbnails/{image_id}_512.jpg
+├── processed/{image_id}.jpg
+└── processed_thumbnails/{image_id}_256.jpg
 ```
 
 **Execution flow:**

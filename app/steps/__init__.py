@@ -13,6 +13,7 @@ from app.steps.post.size_calculator import SizeCalculatorStep
 from app.steps.post.species_distributor import SpeciesDistributorStep
 from app.steps.post.aggregate_detections import AggregateDetectionsStep
 from app.steps.post.visualize_detections import VisualizeDetectionsStep
+from app.steps.post.upload_image import UploadImageStep
 
 
 def register_all_steps() -> None:
@@ -36,6 +37,7 @@ def register_all_steps() -> None:
     StepRegistry.register("species_distributor", SpeciesDistributorStep)
     StepRegistry.register("aggregate_detections", AggregateDetectionsStep)
     StepRegistry.register("visualize_detections", VisualizeDetectionsStep)
+    StepRegistry.register("upload_image", UploadImageStep)
 
 
 __all__ = [
@@ -48,4 +50,5 @@ __all__ = [
     "SpeciesDistributorStep",
     "AggregateDetectionsStep",
     "VisualizeDetectionsStep",
+    "UploadImageStep",
 ]
