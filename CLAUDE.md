@@ -36,10 +36,10 @@ All steps implement `PipelineStep` interface and can be composed in any order:
 - `detection` - Standard YOLO detection
 - `sahi_detection` - Tiled detection for large images
 
-**Post-Processor Steps (tenant-configurable):**
-- `segment_filter` - Filter segments and generate crops for parallel detection
+**Post-Processor Steps (tenant-configurable via settings):**
+- `segment_filter` - Filter segments by `class_name` and generate crops for parallel detection
 - `aggregate_detections` - Merge detections from parallel branches (chord callback)
-- `size_calculator` - Calculate sizes with z-scores
+- `size_calculator` - Calculate sizes with z-scores (thresholds: S < -2σ, M ≤ 1σ, L ≤ 2σ, XL > 2σ)
 - `species_distributor` - Distribute detections across species
 
 ### Pipeline DSL (Celery Canvas-inspired)
@@ -52,26 +52,34 @@ The system uses a serializable DSL stored as JSONB in the database. Supports:
 - `chord` - Parallel + aggregator callback
 - `step` - Step reference with config (kwargs)
 
-**Example pipeline_definition:**
+**Example tenant_config in DB:**
 ```json
 {
-  "type": "chain",
-  "steps": [
-    {"type": "step", "name": "segmentation"},
-    {"type": "step", "name": "segment_filter"},
-    {
-      "type": "chord",
-      "group": {
-        "type": "group",
-        "steps": [
-          {"type": "step", "name": "sahi_detection", "kwargs": {"segment_type": "claro-cajon"}},
-          {"type": "step", "name": "detection", "kwargs": {"segment_type": "cajon"}}
-        ]
+  "pipeline_definition": {
+    "type": "chain",
+    "steps": [
+      {"type": "step", "name": "segmentation"},
+      {"type": "step", "name": "segment_filter"},
+      {
+        "type": "chord",
+        "group": {
+          "type": "group",
+          "steps": [
+            {"type": "step", "name": "sahi_detection", "kwargs": {"segment_type": "segmento"}},
+            {"type": "step", "name": "detection", "kwargs": {"segment_type": "cajon"}}
+          ]
+        },
+        "callback": {"type": "step", "name": "aggregate_detections"}
       },
-      "callback": {"type": "step", "name": "aggregate_detections"}
-    },
-    {"type": "step", "name": "size_calculator"}
-  ]
+      {"type": "step", "name": "size_calculator"},
+      {"type": "step", "name": "species_distributor"}
+    ]
+  },
+  "settings": {
+    "segment_filter_type": "largest_by_class",
+    "segment_filter_classes": ["segmento", "cajon"],
+    "species": ["species_a", "species_b"]
+  }
 }
 ```
 
@@ -192,7 +200,21 @@ pytest tests/test_schemas/test_pipeline_definition.py -v  # Schema tests
 ```bash
 DATABASE_URL=postgresql+asyncpg://...
 GCS_BUCKET=ml-worker-bucket
-ENVIRONMENT=development
+ENVIRONMENT=dev
+USE_LOCAL_STORAGE=true        # Use local filesystem instead of GCS
+LOCAL_STORAGE_ROOT=./local_storage  # Where to store/read images locally
+```
+
+### Local Storage (Development)
+For development without GCS, set `USE_LOCAL_STORAGE=true`:
+```bash
+# Place test images in local_storage/
+local_storage/
+└── tenant-001/
+    └── images/
+        └── test.jpg
+
+# The worker will read from local filesystem instead of GCS
 ```
 
 ## Conventions

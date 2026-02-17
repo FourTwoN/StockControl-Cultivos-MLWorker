@@ -108,74 +108,50 @@ ML Worker uses a **configuration-driven pipeline orchestrator** that routes task
     └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Industry Configuration
+### Tenant Configuration (Database)
 
-Each industry has its own `config.yaml` that defines:
-- **Models**: Which models to load and their parameters
-- **Pipelines**: Named sequences of processors for different use cases
-- **Classes**: What the models detect/classify
+Each tenant has its own pipeline configuration stored in `tenant_config` table as JSONB:
 
-```yaml
-# gs://demeter-models/agro/config.yaml
-industry: agro
-version: "1.2.0"
-
-models:
-  detection:
-    path: detect.pt
-    confidence_threshold: 0.80
-    classes: ["plant", "weed", "pest"]
-
-  segmentation:
-    path: segment.pt
-    confidence_threshold: 0.50
-    classes: ["field", "row", "cajon"]
-
-  classification:
-    enabled: false  # Not used in agro
-
-pipelines:
-  DETECTION:
-    steps: [detection]
-
-  FULL_PIPELINE:
-    steps: [segmentation, detection, estimation]
-
-  FIELD_ANALYSIS:
-    steps: [segmentation, estimation]
+```sql
+SELECT tenant_id, pipeline_definition, settings FROM tenant_config;
 ```
 
-```yaml
-# gs://demeter-models/vending/config.yaml
-industry: vending
-version: "1.0.0"
-
-models:
-  detection:
-    path: detect.pt
-    confidence_threshold: 0.70
-    classes: ["product", "empty_shelf", "price_tag"]
-
-  segmentation:
-    path: segment.pt
-    confidence_threshold: 0.60
-    classes: ["shelf", "section", "cooler"]
-
-  classification:
-    enabled: true
-    path: classify.pt
-    classes: ["coca_cola", "pepsi", "sprite", "water", ...]
-
-pipelines:
-  DETECTION:
-    steps: [detection]
-
-  FULL_PIPELINE:
-    steps: [segmentation, detection, classification, estimation]
-
-  SHELF_AUDIT:
-    steps: [segmentation, detection, classification]
+**Example tenant config:**
+```json
+{
+  "pipeline_definition": {
+    "type": "chain",
+    "steps": [
+      {"type": "step", "name": "segmentation"},
+      {"type": "step", "name": "segment_filter"},
+      {
+        "type": "chord",
+        "group": {
+          "type": "group",
+          "steps": [
+            {"type": "step", "name": "sahi_detection", "kwargs": {"segment_type": "segmento"}},
+            {"type": "step", "name": "detection", "kwargs": {"segment_type": "cajon"}}
+          ]
+        },
+        "callback": {"type": "step", "name": "aggregate_detections"}
+      },
+      {"type": "step", "name": "size_calculator"},
+      {"type": "step", "name": "species_distributor"}
+    ]
+  },
+  "settings": {
+    "segment_filter_type": "largest_by_class",
+    "segment_filter_classes": ["segmento", "cajon"],
+    "species": ["species_a", "species_b"]
+  }
+}
 ```
+
+**DSL Primitives (Celery Canvas-inspired):**
+- `chain` - Sequential execution
+- `group` - Parallel execution with `asyncio.gather`
+- `chord` - Parallel group + aggregator callback
+- `step` - Step reference with optional kwargs
 
 ### Multi-Tenant Isolation
 
@@ -291,22 +267,24 @@ Instead of separate endpoints per task type (`/tasks/process-photo`, `/tasks/com
 
 **Why?** Pipeline definitions live in the industry config YAML, not hardcoded in route handlers. Adding a new pipeline is a config change, not a code change.
 
-#### 2. Configuration-Driven Model Loading
+#### 2. Tenant Configuration from Database
 
-Models are loaded based on the industry config, not environment variables:
+Pipeline definitions are stored per-tenant in PostgreSQL and loaded into an in-memory cache:
 
 ```python
-# Industry config determines which models to load
-config = IndustryConfig.load(industry="agro")
+# Get tenant config from cache (loaded from DB, refreshed every 5 min)
+config = await get_tenant_cache().get(request.tenant_id)
 
-# ModelCache uses config to find model paths
-model = ModelCache.get_model(
-    model_type="detect",
-    config=config.models["detection"]
-)
+# Parse pipeline definition to executable DSL
+parser = PipelineParser(StepRegistry)
+pipeline = parser.parse(config.pipeline_definition)
+
+# Execute with proper parallelism (asyncio.gather for groups)
+executor = PipelineExecutor()
+ctx = await executor.execute(pipeline, ctx)
 ```
 
-**Why?** Different industries may need different models, confidence thresholds, and classes. The config YAML captures all of this.
+**Why?** Different tenants may need different pipelines. The DB-stored JSON DSL captures all of this without code changes.
 
 #### 3. Processors Are Generic
 
@@ -567,67 +545,67 @@ Liveness check (basic response).
 
 ---
 
-## Adding a New Industry
+## Adding a New Tenant
 
-1. **Create models**: Train YOLO models for the new industry and upload to GCS:
-   ```
-   gs://demeter-models/new-industry/
-     ├── detect.pt
-     ├── segment.pt
-     └── config.yaml
-   ```
-
-2. **Create config.yaml**:
-   ```yaml
-   industry: new-industry
-   version: "1.0.0"
-
-   models:
-     detection:
-       path: detect.pt
-       confidence_threshold: 0.75
-       classes: ["item_a", "item_b", "item_c"]
-
-   pipelines:
-     DETECTION:
-       steps: [detection]
-     FULL_PIPELINE:
-       steps: [detection, estimation]
+1. **Insert tenant config** in the database:
+   ```sql
+   INSERT INTO tenant_config (tenant_id, pipeline_definition, settings)
+   VALUES (
+     'new-tenant',
+     '{
+       "type": "chain",
+       "steps": [
+         {"type": "step", "name": "segmentation"},
+         {"type": "step", "name": "detection"}
+       ]
+     }'::jsonb,
+     '{
+       "segment_filter_type": "largest_by_class",
+       "segment_filter_classes": ["segmento"]
+     }'::jsonb
+   );
    ```
 
-3. **Deploy a new ML Worker instance**:
-   ```bash
-   terraform apply -var="industry=new-industry"
-   ```
+2. **The config is automatically loaded** by `TenantConfigCache` (refreshed every 5 minutes).
 
-4. **Configure Backend** to create tasks in the new queue.
-
-No code changes required in ML Worker.
+No code changes or redeployment required.
 
 ---
 
-## Adding a New Pipeline
+## Adding a New Pipeline Step
 
-1. **Define the pipeline** in the industry's `config.yaml`:
-   ```yaml
-   pipelines:
-     # ... existing pipelines ...
+1. **Create step** in `app/steps/post/my_step.py`:
+   ```python
+   from app.core.pipeline_step import PipelineStep
+   from app.core.processing_context import ProcessingContext
 
-     NEW_PIPELINE:
-       steps: [segmentation, detection, classification]
+   class MyStep(PipelineStep):
+       @property
+       def name(self) -> str:
+           return "my_step"
+
+       async def execute(self, ctx: ProcessingContext) -> ProcessingContext:
+           # Read config from ctx.config (tenant settings)
+           my_param = ctx.config.get("my_param", "default")
+           # Process and return new context
+           return ctx.with_results({"my_key": result})
    ```
 
-2. **Upload the updated config** to GCS.
-
-3. **Use the new pipeline** in task requests:
-   ```json
-   {
-     "pipeline": "NEW_PIPELINE",
-     ...
-   }
+2. **Register step** in `app/steps/__init__.py`:
+   ```python
+   StepRegistry.register("my_step", MyStep)
    ```
 
-No code changes or redeployment required.
+3. **Add to tenant pipeline** in DB:
+   ```sql
+   UPDATE tenant_config
+   SET pipeline_definition = jsonb_set(
+     pipeline_definition,
+     '{steps}',
+     pipeline_definition->'steps' || '[{"type": "step", "name": "my_step"}]'
+   )
+   WHERE tenant_id = 'target-tenant';
+   ```
 
 ---
 
