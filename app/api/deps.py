@@ -74,27 +74,49 @@ def validate_cloud_tasks_request(
 ) -> bool:
     """Validate that request comes from Cloud Tasks.
 
-    In production, Cloud Run's IAM invoker role handles auth.
-    This is an additional check for defense in depth.
+    In production (non-dev environments), requires Cloud Tasks headers.
+    Cloud Run's IAM invoker role handles authentication, this is defense in depth.
 
     Args:
-        x_cloudtasks_taskname: Task name header
+        x_cloudtasks_taskname: Task name header (required in prod)
         x_cloudtasks_queuename: Queue name header
 
     Returns:
         True if valid Cloud Tasks request
 
-    Note:
-        In development, this check can be bypassed by setting headers.
+    Raises:
+        HTTPException: 403 if headers missing in production with strict validation
     """
-    # In production, we rely on IAM for auth
-    # These headers are informational
-    if x_cloudtasks_taskname:
-        logger.debug(
-            "Cloud Tasks request validated",
-            task_name=x_cloudtasks_taskname,
-            queue_name=x_cloudtasks_queuename,
+    from app.config import settings
+
+    # In dev mode, allow requests without Cloud Tasks headers
+    if settings.environment == "dev":
+        if x_cloudtasks_taskname:
+            logger.debug(
+                "Cloud Tasks request (dev mode)",
+                task_name=x_cloudtasks_taskname,
+                queue_name=x_cloudtasks_queuename,
+            )
+        return True
+
+    # In production/staging with strict validation enabled
+    if settings.cloudtasks_strict_validation and not x_cloudtasks_taskname:
+        logger.warning(
+            "Rejected request: missing Cloud Tasks headers",
+            has_task_name=bool(x_cloudtasks_taskname),
+            has_queue_name=bool(x_cloudtasks_queuename),
         )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing required Cloud Tasks headers",
+        )
+
+    logger.info(
+        "Cloud Tasks request validated",
+        task_name=x_cloudtasks_taskname,
+        queue_name=x_cloudtasks_queuename,
+        environment=settings.environment,
+    )
     return True
 
 

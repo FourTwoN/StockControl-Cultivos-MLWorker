@@ -7,6 +7,102 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from app.schemas.pipeline_definition import PipelineDefinition, StepDefinition
 
 
+class TestCloudTasksValidation:
+    """Tests for Cloud Tasks header validation."""
+
+    @pytest.fixture
+    def valid_request_payload(self) -> dict:
+        return {
+            "tenant_id": "test-tenant-001",
+            "session_id": "550e8400-e29b-41d4-a716-446655440000",
+            "image_id": "660e8400-e29b-41d4-a716-446655440001",
+            "image_url": "gs://test-bucket/test-tenant-001/images/test.jpg",
+            "pipeline": "DETECTION",
+        }
+
+    @pytest.fixture
+    def cloud_tasks_headers(self) -> dict:
+        return {
+            "X-CloudTasks-TaskName": "test-task-123",
+            "X-CloudTasks-QueueName": "test-queue",
+        }
+
+    @pytest.mark.asyncio
+    async def test_rejects_requests_without_headers_in_prod(
+        self, client: AsyncClient, valid_request_payload: dict
+    ):
+        """Test that requests without Cloud Tasks headers are rejected in production."""
+        with patch("app.config.settings.environment", "prod"), \
+             patch("app.config.settings.cloudtasks_strict_validation", True):
+            response = await client.post(
+                "/tasks/process",
+                json=valid_request_payload,
+            )
+
+        assert response.status_code == 403
+        assert "Cloud Tasks" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_requests_without_headers_in_staging(
+        self, client: AsyncClient, valid_request_payload: dict
+    ):
+        """Test that requests without Cloud Tasks headers are rejected in staging."""
+        with patch("app.config.settings.environment", "staging"), \
+             patch("app.config.settings.cloudtasks_strict_validation", True):
+            response = await client.post(
+                "/tasks/process",
+                json=valid_request_payload,
+            )
+
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_allows_requests_with_headers_in_prod(
+        self, client: AsyncClient, valid_request_payload: dict, cloud_tasks_headers: dict
+    ):
+        """Test that requests with Cloud Tasks headers pass validation in production."""
+        with patch("app.config.settings.environment", "prod"), \
+             patch("app.config.settings.cloudtasks_strict_validation", True):
+            response = await client.post(
+                "/tasks/process",
+                json=valid_request_payload,
+                headers=cloud_tasks_headers,
+            )
+
+        # Should pass validation and fail on tenant config (404) not auth (403)
+        assert response.status_code != 403
+
+    @pytest.mark.asyncio
+    async def test_allows_requests_without_headers_in_dev(
+        self, client: AsyncClient, valid_request_payload: dict
+    ):
+        """Test that requests without Cloud Tasks headers are allowed in dev."""
+        with patch("app.config.settings.environment", "dev"), \
+             patch("app.config.settings.cloudtasks_strict_validation", True):
+            response = await client.post(
+                "/tasks/process",
+                json=valid_request_payload,
+            )
+
+        # Should pass validation (not 403) - may fail on other reasons
+        assert response.status_code != 403
+
+    @pytest.mark.asyncio
+    async def test_allows_requests_when_strict_validation_disabled(
+        self, client: AsyncClient, valid_request_payload: dict
+    ):
+        """Test that requests pass when strict validation is disabled."""
+        with patch("app.config.settings.environment", "prod"), \
+             patch("app.config.settings.cloudtasks_strict_validation", False):
+            response = await client.post(
+                "/tasks/process",
+                json=valid_request_payload,
+            )
+
+        # Should pass validation even without headers
+        assert response.status_code != 403
+
+
 class TestProcessEndpoint:
     """Tests for /tasks/process endpoint."""
 

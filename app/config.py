@@ -151,6 +151,10 @@ class Settings(BaseSettings):
         default="us-central1",
         description="Cloud Tasks queue location",
     )
+    cloudtasks_strict_validation: bool = Field(
+        default=True,
+        description="Require Cloud Tasks headers in non-dev environments",
+    )
 
     @computed_field  # type: ignore[prop-decorator]
     @property
