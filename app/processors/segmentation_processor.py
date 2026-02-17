@@ -3,6 +3,7 @@
 Extracts segments/regions from images using YOLO segmentation model.
 """
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -96,50 +97,92 @@ class SegmentationProcessor(BaseProcessor[list[SegmentResult]]):
             FileNotFoundError: If image_path doesn't exist
             RuntimeError: If segmentation fails
         """
+        inference_start = time.perf_counter()
+
         # Validate image path
         image_path = self._validate_image_path(image_path)
 
         # Get model from singleton (lazy load)
         if self._model is None or self._worker_id_cached != self.worker_id:
-            logger.info("Loading segmentation model", worker_id=self.worker_id)
+            load_start = time.perf_counter()
+            logger.info(
+                "Loading segmentation model from cache",
+                worker_id=self.worker_id,
+                model_type="segment",
+            )
             self._model = ModelCache.get_model("segment", self.worker_id)
             self._worker_id_cached = self.worker_id
-            logger.info("Segmentation model loaded")
+
+            is_onnx = getattr(self._model, "_mlworker_is_onnx", False)
+            device = getattr(self._model, "_mlworker_device", "unknown")
+            load_duration_ms = int((time.perf_counter() - load_start) * 1000)
+
+            logger.info(
+                "Segmentation model ready",
+                worker_id=self.worker_id,
+                is_onnx=is_onnx,
+                device=device,
+                model_classes=list(self._model.names.values()) if hasattr(self._model, "names") else [],
+                load_duration_ms=load_duration_ms,
+            )
 
         # Run YOLO segmentation
         try:
-            logger.debug(
-                "Running segmentation",
+            logger.info(
+                "Running segmentation inference",
                 image=image_path.name,
+                image_size_bytes=image_path.stat().st_size if image_path.exists() else 0,
                 confidence_threshold=self.confidence_threshold,
             )
 
             # For ONNX models, pass device to predict()
             device = getattr(self._model, "_mlworker_device", None)
 
+            predict_start = time.perf_counter()
             results = self._model.predict(
                 source=str(image_path),
                 conf=self.confidence_threshold,
                 verbose=False,
                 device=device,
             )
+            predict_duration_ms = int((time.perf_counter() - predict_start) * 1000)
 
             # Parse results
             segments = self._parse_results(results[0], classes)
 
+            total_duration_ms = int((time.perf_counter() - inference_start) * 1000)
+
+            # Log detailed segment info
+            segment_summary = [
+                f"{s.class_name}(idx={s.segment_idx}, conf={s.confidence:.2f}, area={s.area_px:.0f})"
+                for s in segments
+            ]
+
             logger.info(
-                "Segmentation complete",
+                "Segmentation inference completed",
                 image=image_path.name,
-                segments=len(segments),
+                segments_found=len(segments),
+                segment_classes=[s.class_name for s in segments],
+                inference_ms=predict_duration_ms,
+                total_ms=total_duration_ms,
             )
+
+            if segments:
+                logger.debug(
+                    "Segment details",
+                    segments=segment_summary,
+                )
 
             return segments
 
         except Exception as e:
+            total_duration_ms = int((time.perf_counter() - inference_start) * 1000)
             logger.error(
-                "Segmentation failed",
+                "Segmentation inference FAILED",
                 image=image_path.name,
-                error=str(e),
+                error_type=type(e).__name__,
+                error_message=str(e),
+                duration_ms=total_duration_ms,
                 exc_info=True,
             )
             raise RuntimeError(f"Segmentation failed: {e}") from e

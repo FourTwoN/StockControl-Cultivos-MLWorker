@@ -5,6 +5,7 @@ steps with proper parallelization using asyncio.gather.
 """
 
 import asyncio
+import time
 from typing import Any
 
 from app.core.pipeline_dsl import Chain, Chord, Group, PipelineElement, StepSignature
@@ -59,12 +60,49 @@ class PipelineExecutor:
 
         Each step receives the context from the previous step.
         """
-        logger.debug("Executing chain", steps=len(chain.steps))
+        chain_start = time.perf_counter()
+        step_count = len(chain.steps)
 
-        for element in chain.steps:
+        logger.info(
+            "Pipeline chain started",
+            tenant_id=ctx.tenant_id,
+            image_id=ctx.image_id,
+            total_steps=step_count,
+        )
+
+        for idx, element in enumerate(chain.steps, 1):
+            step_name = self._get_element_name(element)
+            logger.info(
+                f"Step {idx}/{step_count} starting",
+                tenant_id=ctx.tenant_id,
+                image_id=ctx.image_id,
+                step=step_name,
+                step_number=idx,
+            )
             ctx = await self.execute(element, ctx)
 
+        chain_duration_ms = int((time.perf_counter() - chain_start) * 1000)
+        logger.info(
+            "Pipeline chain completed",
+            tenant_id=ctx.tenant_id,
+            image_id=ctx.image_id,
+            total_steps=step_count,
+            duration_ms=chain_duration_ms,
+        )
+
         return ctx
+
+    def _get_element_name(self, element: PipelineElement) -> str:
+        """Get descriptive name for a pipeline element."""
+        if isinstance(element, StepSignature):
+            return element.name
+        elif isinstance(element, Chain):
+            return f"chain({len(element.steps)} steps)"
+        elif isinstance(element, Group):
+            return f"group({len(element.steps)} branches)"
+        elif isinstance(element, Chord):
+            return f"chord({len(element.group.steps)} branches)"
+        return type(element).__name__
 
     async def _execute_step(
         self,
@@ -75,19 +113,51 @@ class PipelineExecutor:
 
         Injects step kwargs into context.step_config before execution.
         """
-        logger.debug("Executing step", step=sig.name, kwargs=sig.kwargs)
+        step_start = time.perf_counter()
 
-        # Get step instance from registry
-        step_instance = StepRegistry.get(sig.name)
+        logger.debug(
+            "Step execution starting",
+            tenant_id=ctx.tenant_id,
+            image_id=ctx.image_id,
+            step=sig.name,
+            kwargs=sig.kwargs,
+        )
 
-        # Inject step-specific config
-        if sig.kwargs:
-            ctx = ctx.with_step_config(sig.kwargs)
+        try:
+            # Get step instance from registry
+            step_instance = StepRegistry.get(sig.name)
 
-        # Execute step
-        result = await step_instance.execute(ctx)
+            # Inject step-specific config
+            if sig.kwargs:
+                ctx = ctx.with_step_config(sig.kwargs)
 
-        return result
+            # Execute step
+            result = await step_instance.execute(ctx)
+
+            step_duration_ms = int((time.perf_counter() - step_start) * 1000)
+            logger.info(
+                "Step completed successfully",
+                tenant_id=ctx.tenant_id,
+                image_id=ctx.image_id,
+                step=sig.name,
+                duration_ms=step_duration_ms,
+            )
+
+            return result
+
+        except Exception as e:
+            step_duration_ms = int((time.perf_counter() - step_start) * 1000)
+            logger.error(
+                "Step execution FAILED",
+                tenant_id=ctx.tenant_id,
+                image_id=ctx.image_id,
+                step=sig.name,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                duration_ms=step_duration_ms,
+                exc_info=True,
+            )
+            raise
 
     async def _execute_group(
         self,
@@ -99,7 +169,16 @@ class PipelineExecutor:
         All branches receive the same input context.
         Results are merged into a single output context.
         """
-        logger.debug("Executing group", branches=len(grp.steps))
+        group_start = time.perf_counter()
+        branch_names = [self._get_element_name(e) for e in grp.steps]
+
+        logger.info(
+            "Parallel group started",
+            tenant_id=ctx.tenant_id,
+            image_id=ctx.image_id,
+            branch_count=len(grp.steps),
+            branches=branch_names,
+        )
 
         # Create tasks for parallel execution
         tasks = [self.execute(element, ctx) for element in grp.steps]
@@ -109,6 +188,19 @@ class PipelineExecutor:
 
         # Merge results back into original context
         merged = self._merge_contexts(ctx, results)
+
+        group_duration_ms = int((time.perf_counter() - group_start) * 1000)
+
+        # Log summary of parallel execution
+        total_detections = len(merged.raw_detections)
+        logger.info(
+            "Parallel group completed",
+            tenant_id=ctx.tenant_id,
+            image_id=ctx.image_id,
+            branch_count=len(grp.steps),
+            total_detections_merged=total_detections,
+            duration_ms=group_duration_ms,
+        )
 
         return merged
 
@@ -121,10 +213,15 @@ class PipelineExecutor:
 
         The callback receives the merged context from all branches.
         """
-        logger.debug(
-            "Executing chord",
-            branches=len(chrd.group.steps),
-            callback=chrd.callback.name if chrd.callback else None,
+        chord_start = time.perf_counter()
+        callback_name = chrd.callback.name if chrd.callback else "none"
+
+        logger.info(
+            "Chord execution started (parallel + callback)",
+            tenant_id=ctx.tenant_id,
+            image_id=ctx.image_id,
+            branch_count=len(chrd.group.steps),
+            callback=callback_name,
         )
 
         # Execute group first
@@ -132,7 +229,23 @@ class PipelineExecutor:
 
         # Execute callback if present
         if chrd.callback:
+            logger.info(
+                "Chord callback starting",
+                tenant_id=ctx.tenant_id,
+                image_id=ctx.image_id,
+                callback=callback_name,
+                detections_to_aggregate=len(ctx.raw_detections),
+            )
             ctx = await self._execute_step(chrd.callback, ctx)
+
+        chord_duration_ms = int((time.perf_counter() - chord_start) * 1000)
+        logger.info(
+            "Chord completed",
+            tenant_id=ctx.tenant_id,
+            image_id=ctx.image_id,
+            callback=callback_name,
+            duration_ms=chord_duration_ms,
+        )
 
         return ctx
 
@@ -158,10 +271,22 @@ class PipelineExecutor:
         all_classifications: list[dict[str, Any]] = []
         merged_results: dict[str, Any] = {}
 
-        for result_ctx in results:
+        branch_summaries = []
+        for idx, result_ctx in enumerate(results):
+            det_count = len(result_ctx.raw_detections)
             all_detections.extend(result_ctx.raw_detections)
             all_classifications.extend(result_ctx.raw_classifications)
             merged_results.update(result_ctx.results)
+            branch_summaries.append(f"branch_{idx}={det_count}")
+
+        logger.debug(
+            "Merging parallel branch results",
+            tenant_id=original.tenant_id,
+            image_id=original.image_id,
+            branch_count=len(results),
+            detections_per_branch=", ".join(branch_summaries),
+            total_detections=len(all_detections),
+        )
 
         # Build merged context preserving segments from original
         return ProcessingContext(

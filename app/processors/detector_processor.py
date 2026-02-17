@@ -4,6 +4,7 @@ Ported from DemeterAI-back with adaptations for async Cloud Tasks processing.
 Runs direct YOLO detection (without SAHI tiling).
 """
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -123,51 +124,90 @@ class DetectorProcessor(BaseProcessor[list[DetectionResult]]):
             FileNotFoundError: If image_path doesn't exist
             RuntimeError: If YOLO detection fails
         """
+        inference_start = time.perf_counter()
+
         # Validate image path
         image_path = self._validate_image_path(image_path)
 
         # Get model from singleton (lazy load)
         if self._model is None or self._worker_id_cached != self.worker_id:
-            logger.info("Loading detection model", worker_id=self.worker_id)
+            load_start = time.perf_counter()
+            logger.info(
+                "Loading detection model from cache",
+                worker_id=self.worker_id,
+                model_type="detect",
+            )
             self._model = ModelCache.get_model("detect", self.worker_id)
             self._worker_id_cached = self.worker_id
-            logger.info("Detection model loaded")
+
+            is_onnx = getattr(self._model, "_mlworker_is_onnx", False)
+            device = getattr(self._model, "_mlworker_device", "unknown")
+            load_duration_ms = int((time.perf_counter() - load_start) * 1000)
+
+            logger.info(
+                "Detection model ready",
+                worker_id=self.worker_id,
+                is_onnx=is_onnx,
+                device=device,
+                model_classes=list(self._model.names.values()) if hasattr(self._model, "names") else [],
+                load_duration_ms=load_duration_ms,
+            )
 
         # Run YOLO detection
         try:
-            logger.debug(
-                "Running detection",
+            logger.info(
+                "Running detection inference",
                 image=image_path.name,
+                image_size_bytes=image_path.stat().st_size if image_path.exists() else 0,
                 confidence_threshold=self.confidence_threshold,
             )
 
             # For ONNX models, pass device to predict()
             device = getattr(self._model, "_mlworker_device", None)
 
+            predict_start = time.perf_counter()
             results = self._model.predict(
                 source=str(image_path),
                 conf=self.confidence_threshold,
                 verbose=False,
                 device=device,
             )
+            predict_duration_ms = int((time.perf_counter() - predict_start) * 1000)
 
             # Parse YOLO results
             detections = self._parse_yolo_results(results[0], classes)
 
+            total_duration_ms = int((time.perf_counter() - inference_start) * 1000)
+
+            # Log with confidence distribution summary
+            if detections:
+                conf_values = [d.confidence for d in detections]
+                conf_min = min(conf_values)
+                conf_max = max(conf_values)
+                conf_avg = sum(conf_values) / len(conf_values)
+            else:
+                conf_min = conf_max = conf_avg = 0.0
+
             logger.info(
-                "Detection complete",
+                "Detection inference completed",
                 image=image_path.name,
-                detections=len(detections),
-                confidence_threshold=self.confidence_threshold,
+                detections_found=len(detections),
+                confidence_range=f"{conf_min:.2f}-{conf_max:.2f}",
+                confidence_avg=f"{conf_avg:.2f}",
+                inference_ms=predict_duration_ms,
+                total_ms=total_duration_ms,
             )
 
             return detections
 
         except Exception as e:
+            total_duration_ms = int((time.perf_counter() - inference_start) * 1000)
             logger.error(
-                "Detection failed",
+                "Detection inference FAILED",
                 image=image_path.name,
-                error=str(e),
+                error_type=type(e).__name__,
+                error_message=str(e),
+                duration_ms=total_duration_ms,
                 exc_info=True,
             )
             raise RuntimeError(f"Detection failed: {e}") from e

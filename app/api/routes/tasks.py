@@ -49,19 +49,50 @@ async def process_task(
     start_time = time.time()
     local_path: Path | None = None
 
+    # Log request received
+    logger.info(
+        "Processing request received",
+        tenant_id=request.tenant_id,
+        session_id=str(request.session_id),
+        image_id=str(request.image_id),
+        image_url=request.image_url,
+    )
+
     try:
         # Get tenant config from cache (already validated at load time)
         config = await get_tenant_cache().get(request.tenant_id)
         if not config:
+            logger.error(
+                "Tenant config not found",
+                tenant_id=request.tenant_id,
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No pipeline config for tenant: {request.tenant_id}",
             )
 
+        logger.info(
+            "Tenant config loaded",
+            tenant_id=request.tenant_id,
+            pipeline_steps=len(config.pipeline_definition.steps),
+            settings_keys=list(config.settings.keys()) if config.settings else [],
+        )
+
         # Download image
+        download_start = time.time()
         local_path = await storage.download_to_tempfile(
             blob_path=request.image_url,
             tenant_id=request.tenant_id,
+        )
+        download_ms = int((time.time() - download_start) * 1000)
+
+        logger.info(
+            "Image downloaded",
+            tenant_id=request.tenant_id,
+            image_id=str(request.image_id),
+            local_path=str(local_path),
+            file_size_bytes=local_path.stat().st_size if local_path.exists() else 0,
+            download_ms=download_ms,
         )
 
         # Create initial context
@@ -77,6 +108,13 @@ async def process_task(
         parser = PipelineParser(StepRegistry)
         pipeline = parser.parse(config.pipeline_definition)
 
+        logger.info(
+            "Pipeline parsed, starting execution",
+            tenant_id=request.tenant_id,
+            image_id=str(request.image_id),
+            pipeline_type=type(pipeline).__name__,
+        )
+
         # Execute pipeline (always uses executor, supports parallelism)
         executor = PipelineExecutor()
         ctx = await executor.execute(pipeline, ctx)
@@ -90,6 +128,19 @@ async def process_task(
             "detections": ctx.raw_detections,
             "classifications_raw": ctx.raw_classifications,
         }
+
+        # Log success summary
+        logger.info(
+            "Processing completed SUCCESSFULLY",
+            tenant_id=request.tenant_id,
+            session_id=str(request.session_id),
+            image_id=str(request.image_id),
+            segments_found=len(ctx.raw_segments),
+            detections_found=len(ctx.raw_detections),
+            total_duration_ms=duration_ms,
+            download_ms=download_ms,
+            processing_ms=duration_ms - download_ms,
+        )
 
         return ProcessingResponse(
             success=True,
@@ -105,8 +156,17 @@ async def process_task(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Pipeline execution failed", error=str(e), exc_info=True)
         duration_ms = int((time.time() - start_time) * 1000)
+        logger.error(
+            "Processing FAILED",
+            tenant_id=request.tenant_id,
+            session_id=str(request.session_id),
+            image_id=str(request.image_id),
+            error_type=type(e).__name__,
+            error_message=str(e),
+            duration_ms=duration_ms,
+            exc_info=True,
+        )
         return ProcessingResponse(
             success=False,
             tenant_id=request.tenant_id,
@@ -121,6 +181,10 @@ async def process_task(
     finally:
         if local_path and local_path.exists():
             local_path.unlink(missing_ok=True)
+            logger.debug(
+                "Temp file cleaned up",
+                path=str(local_path),
+            )
 
 
 @router.post(
