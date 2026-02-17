@@ -141,11 +141,14 @@ class DetectorProcessor(BaseProcessor[list[DetectionResult]]):
                 confidence_threshold=self.confidence_threshold,
             )
 
+            # For ONNX models, pass device to predict()
+            device = getattr(self._model, "_mlworker_device", None)
+
             results = self._model.predict(
                 source=str(image_path),
                 conf=self.confidence_threshold,
                 verbose=False,
-                device=None,  # Use model's assigned device
+                device=device,
             )
 
             # Parse YOLO results

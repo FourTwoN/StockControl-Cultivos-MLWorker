@@ -114,16 +114,16 @@ class Settings(BaseSettings):
     # ML Models
     # =========================================================================
     model_path: str = Field(
-        default="./models",
+        default="./checkpoints",
         description="Path to ML models (local or gs:// for GCS)",
     )
     detection_model: str = Field(
-        default="detect.pt",
-        description="Detection model filename",
+        default="detect.onnx",
+        description="Detection model filename (ONNX format)",
     )
     segmentation_model: str = Field(
-        default="segment.pt",
-        description="Segmentation model filename",
+        default="segment.onnx",
+        description="Segmentation model filename (ONNX format)",
     )
     confidence_threshold: float = Field(
         default=0.80,

@@ -91,10 +91,16 @@ class ModelCache:
                 # Get model path (download from GCS if needed)
                 model_path = cls._get_model_path(model_type)
 
-                # Load model
-                model = YOLO(str(model_path))
+                # Load model - for ONNX, explicitly pass task since it can't be inferred
+                is_onnx = str(model_path).endswith(".onnx")
+                if is_onnx:
+                    # ONNX models need explicit task parameter for correct class mapping
+                    model = YOLO(str(model_path), task=model_type)
+                    logger.info("Loaded ONNX model with explicit task", task=model_type)
+                else:
+                    model = YOLO(str(model_path))
 
-                # Assign device
+                # Determine device for inference
                 if torch.cuda.is_available():
                     gpu_count = torch.cuda.device_count()
                     gpu_id = worker_id % gpu_count
@@ -104,10 +110,15 @@ class ModelCache:
                     device = "cpu"
                     logger.info("GPU not available, using CPU", worker_id=worker_id)
 
-                model = model.to(device)
+                # For PyTorch models (.pt), move to device and fuse
+                # For ONNX models, device is passed at inference time
+                if not is_onnx:
+                    model = model.to(device)
+                    model.fuse()
 
-                # Optimize model for inference
-                model.fuse()
+                # Store device info for ONNX models to use at inference
+                model._mlworker_device = device
+                model._mlworker_is_onnx = is_onnx
 
                 # Cache
                 cls._instances[cache_key] = model
