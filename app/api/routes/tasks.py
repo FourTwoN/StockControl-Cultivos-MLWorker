@@ -1,7 +1,7 @@
 """Unified task endpoint for all ML processing.
 
-Receives tasks from Cloud Tasks and routes them through the
-dynamic pipeline configured per tenant in the database.
+Receives tasks from Cloud Tasks with pipeline_definition inline.
+No database lookup - fully stateless.
 """
 
 import time
@@ -9,12 +9,11 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.api.deps import CloudTasksRequest, DbSession, Storage
+from app.api.deps import CloudTasksRequest, Storage
 from app.core.pipeline_executor import PipelineExecutor
-from app.core.pipeline_parser import PipelineParser
+from app.core.pipeline_parser import PipelineParser, PipelineParserError
 from app.core.processing_context import ProcessingContext
 from app.core.step_registry import StepRegistry
-from app.core.tenant_config import get_tenant_cache
 from app.infra.logging import get_logger
 from app.schemas.task import ProcessingRequest, ProcessingResponse
 
@@ -25,18 +24,17 @@ logger = get_logger(__name__)
 @router.post(
     "/process",
     response_model=ProcessingResponse,
-    summary="Process image through tenant-configured pipeline",
+    summary="Process image through pipeline defined in request",
 )
 async def process_task(
     request: ProcessingRequest,
     storage: Storage,
-    db: DbSession,
     _: CloudTasksRequest,
 ) -> ProcessingResponse:
-    """Process image using dynamic pipeline per tenant.
+    """Process image using pipeline_definition from request.
 
-    The pipeline is defined in tenant_config.pipeline_definition (JSONB)
-    and supports full DSL composition: chain, group, chord for parallel execution.
+    Pipeline is defined directly in the request payload - no DB lookup.
+    Supports full DSL composition: chain, group, chord for parallel execution.
     """
     start_time = time.time()
     local_path: Path | None = None
@@ -48,26 +46,30 @@ async def process_task(
         session_id=str(request.session_id),
         image_id=str(request.image_id),
         image_url=request.image_url,
+        pipeline_type=request.pipeline_definition.type,
     )
 
     try:
-        # Get tenant config from cache (already validated at load time)
-        config = await get_tenant_cache().get(request.tenant_id)
-        if not config:
+        # Parse and validate pipeline definition (fail-fast)
+        parser = PipelineParser(StepRegistry)
+        try:
+            pipeline = parser.parse(request.pipeline_definition)
+        except PipelineParserError as e:
             logger.error(
-                "Tenant config not found",
+                "Invalid pipeline definition",
                 tenant_id=request.tenant_id,
+                error=str(e),
             )
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No pipeline config for tenant: {request.tenant_id}",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid pipeline: {e}",
             )
 
         logger.info(
-            "Tenant config loaded",
+            "Pipeline validated",
             tenant_id=request.tenant_id,
-            pipeline_steps=len(config.pipeline_definition.steps),
-            settings_keys=list(config.settings.keys()) if config.settings else [],
+            pipeline_type=type(pipeline).__name__,
+            steps_count=len(request.pipeline_definition.steps),
         )
 
         # Download image
@@ -87,27 +89,23 @@ async def process_task(
             download_ms=download_ms,
         )
 
-        # Create initial context
+        # Create initial context with settings from request
         ctx = ProcessingContext(
             tenant_id=request.tenant_id,
             image_id=str(request.image_id),
             session_id=str(request.session_id),
             image_path=local_path,
-            config=config.settings,
+            config=request.settings,
         )
 
-        # Parse pipeline definition to DSL structures
-        parser = PipelineParser(StepRegistry)
-        pipeline = parser.parse(config.pipeline_definition)
-
         logger.info(
-            "Pipeline parsed, starting execution",
+            "Pipeline execution starting",
             tenant_id=request.tenant_id,
             image_id=str(request.image_id),
             pipeline_type=type(pipeline).__name__,
         )
 
-        # Execute pipeline (always uses executor, supports parallelism)
+        # Execute pipeline
         executor = PipelineExecutor()
         ctx = await executor.execute(pipeline, ctx)
 
@@ -139,10 +137,10 @@ async def process_task(
             tenant_id=request.tenant_id,
             session_id=request.session_id,
             image_id=request.image_id,
-            pipeline=config.pipeline_definition.model_dump_json(),
+            pipeline_type=request.pipeline_definition.type,
             results=full_results,
             duration_ms=duration_ms,
-            steps_completed=len(config.pipeline_definition.steps),
+            steps_completed=len(request.pipeline_definition.steps),
         )
 
     except HTTPException:
@@ -164,7 +162,7 @@ async def process_task(
             tenant_id=request.tenant_id,
             session_id=request.session_id,
             image_id=request.image_id,
-            pipeline="",
+            pipeline_type=request.pipeline_definition.type,
             results={},
             duration_ms=duration_ms,
             steps_completed=0,

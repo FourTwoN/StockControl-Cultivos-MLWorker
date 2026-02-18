@@ -1,8 +1,10 @@
-"""Tests for task processing endpoints."""
+"""Tests for /tasks/process endpoint with inline pipeline_definition."""
 
 import pytest
 from httpx import AsyncClient
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
+from pathlib import Path
 
 from app.schemas.pipeline_definition import PipelineDefinition, StepDefinition
 
@@ -14,10 +16,14 @@ class TestCloudTasksValidation:
     def valid_request_payload(self) -> dict:
         return {
             "tenant_id": "test-tenant-001",
-            "session_id": "550e8400-e29b-41d4-a716-446655440000",
-            "image_id": "660e8400-e29b-41d4-a716-446655440001",
+            "session_id": str(uuid4()),
+            "image_id": str(uuid4()),
             "image_url": "gs://test-bucket/test-tenant-001/images/test.jpg",
-            "pipeline": "DETECTION",
+            "pipeline_definition": {
+                "type": "chain",
+                "steps": [{"type": "step", "name": "segmentation"}],
+            },
+            "settings": {"segment_filter_classes": ["segmento"]},
         }
 
     @pytest.fixture
@@ -69,7 +75,7 @@ class TestCloudTasksValidation:
                 headers=cloud_tasks_headers,
             )
 
-        # Should pass validation and fail on tenant config (404) not auth (403)
+        # Should pass header validation (not 403)
         assert response.status_code != 403
 
     @pytest.mark.asyncio
@@ -104,30 +110,100 @@ class TestCloudTasksValidation:
 
 
 class TestProcessEndpoint:
-    """Tests for /tasks/process endpoint."""
+    """Tests for /tasks/process endpoint with inline pipeline_definition."""
 
     @pytest.fixture
     def valid_request_payload(self) -> dict:
         return {
-            "tenant_id": "test-tenant-001",
-            "session_id": "550e8400-e29b-41d4-a716-446655440000",
-            "image_id": "660e8400-e29b-41d4-a716-446655440001",
-            "image_url": "gs://test-bucket/test-tenant-001/images/test.jpg",
-            "pipeline": "DETECTION",
+            "tenant_id": "tenant-001",
+            "session_id": str(uuid4()),
+            "image_id": str(uuid4()),
+            "image_url": "gs://bucket/tenant-001/images/test.jpg",
+            "pipeline_definition": {
+                "type": "chain",
+                "steps": [
+                    {"type": "step", "name": "segmentation"},
+                ],
+            },
+            "settings": {"segment_filter_classes": ["segmento"]},
         }
 
+    @pytest.fixture
+    def mock_storage(self):
+        """Mock storage client."""
+        storage = AsyncMock()
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mock_path.stat.return_value.st_size = 1024
+        mock_path.unlink = MagicMock()
+        storage.download_to_tempfile = AsyncMock(return_value=mock_path)
+        return storage
+
     @pytest.mark.asyncio
-    async def test_process_requires_cloud_tasks_headers(
-        self, client: AsyncClient, valid_request_payload: dict
+    async def test_process_accepts_pipeline_definition(
+        self, client: AsyncClient, valid_request_payload: dict, mock_storage
     ):
-        """Test that endpoint returns 404 when tenant config is not found."""
-        # Without tenant config in cache, should return 404
-        response = await client.post(
-            "/tasks/process",
-            json=valid_request_payload,
-        )
-        # Returns 404 because tenant config is not in cache
-        assert response.status_code == 404
+        """Endpoint should accept request with pipeline_definition."""
+        mock_ctx = MagicMock()
+        mock_ctx.results = {}
+        mock_ctx.raw_segments = []
+        mock_ctx.raw_detections = []
+        mock_ctx.raw_classifications = []
+
+        with patch("app.api.deps.get_storage_client", return_value=mock_storage):
+            with patch("app.api.routes.tasks.PipelineParser") as mock_parser_class:
+                mock_parser = MagicMock()
+                mock_parser.parse.return_value = MagicMock()
+                mock_parser_class.return_value = mock_parser
+
+                with patch("app.api.routes.tasks.PipelineExecutor") as mock_executor:
+                    mock_executor.return_value.execute = AsyncMock(return_value=mock_ctx)
+
+                    response = await client.post(
+                        "/tasks/process",
+                        json=valid_request_payload,
+                        headers={"X-CloudTasks-TaskName": "test-task"},
+                    )
+
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["success"] is True
+                    assert data["tenant_id"] == "tenant-001"
+
+    @pytest.mark.asyncio
+    async def test_process_rejects_invalid_pipeline(
+        self, client: AsyncClient, mock_storage
+    ):
+        """Endpoint should reject invalid pipeline_definition."""
+        payload = {
+            "tenant_id": "tenant-001",
+            "session_id": str(uuid4()),
+            "image_id": str(uuid4()),
+            "image_url": "gs://bucket/image.jpg",
+            "pipeline_definition": {
+                "type": "chain",
+                "steps": [
+                    {"type": "step", "name": "nonexistent_step"},  # Invalid
+                ],
+            },
+        }
+
+        from app.core.pipeline_parser import PipelineParserError
+
+        with patch("app.api.deps.get_storage_client", return_value=mock_storage):
+            with patch("app.api.routes.tasks.PipelineParser") as mock_parser_class:
+                mock_parser = MagicMock()
+                mock_parser.parse.side_effect = PipelineParserError("Unknown step: nonexistent_step")
+                mock_parser_class.return_value = mock_parser
+
+                response = await client.post(
+                    "/tasks/process",
+                    json=payload,
+                    headers={"X-CloudTasks-TaskName": "test-task"},
+                )
+
+                assert response.status_code == 400
+                assert "Invalid pipeline" in response.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_process_validates_request_schema(self, client: AsyncClient):
@@ -148,54 +224,38 @@ class TestProcessEndpoint:
             "session_id": "not-a-uuid",
             "image_id": "also-not-a-uuid",
             "image_url": "gs://bucket/path",
-            "pipeline": "DETECTION",
+            "pipeline_definition": {
+                "type": "chain",
+                "steps": [{"type": "step", "name": "detection"}],
+            },
         }
 
         response = await client.post("/tasks/process", json=invalid_payload)
         assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_process_with_mocked_pipeline(
-        self, client: AsyncClient, valid_request_payload: dict
+    async def test_process_returns_error_on_failure(
+        self, client: AsyncClient, valid_request_payload: dict, mock_storage
     ):
-        """Test process endpoint with mocked tenant config and pipeline."""
-        # Create mock config with PipelineDefinition
-        mock_config = MagicMock()
-        mock_config.pipeline_definition = PipelineDefinition(
-            steps=[StepDefinition(name="detection")]
-        )
-        mock_config.settings = {}
-
-        mock_ctx = MagicMock()
-        mock_ctx.results = {"detection": []}
-        mock_ctx.raw_segments = []
-        mock_ctx.raw_detections = []
-        mock_ctx.raw_classifications = []
-
-        with patch("app.api.routes.tasks.get_tenant_cache") as mock_cache:
-            mock_cache.return_value.get = AsyncMock(return_value=mock_config)
-
+        """Endpoint should return success=False on processing failure."""
+        with patch("app.api.deps.get_storage_client", return_value=mock_storage):
             with patch("app.api.routes.tasks.PipelineParser") as mock_parser_class:
                 mock_parser = MagicMock()
-                mock_parser.parse.return_value = MagicMock()  # Return mock Chain
+                mock_parser.parse.return_value = MagicMock()
                 mock_parser_class.return_value = mock_parser
 
-                with patch("app.api.routes.tasks.PipelineExecutor") as mock_executor_class:
-                    mock_executor = MagicMock()
-                    mock_executor.execute = AsyncMock(return_value=mock_ctx)
-                    mock_executor_class.return_value = mock_executor
+                with patch("app.api.routes.tasks.PipelineExecutor") as mock_executor:
+                    mock_executor.return_value.execute = AsyncMock(
+                        side_effect=RuntimeError("Pipeline execution failed")
+                    )
 
-                    with patch("app.api.deps.get_storage_client") as mock_storage:
-                        mock_storage_instance = MagicMock()
-                        mock_storage_instance.download_to_tempfile = AsyncMock(
-                            return_value=MagicMock(exists=lambda: False)
-                        )
-                        mock_storage.return_value = mock_storage_instance
+                    response = await client.post(
+                        "/tasks/process",
+                        json=valid_request_payload,
+                        headers={"X-CloudTasks-TaskName": "test-task"},
+                    )
 
-                        response = await client.post(
-                            "/tasks/process",
-                            json=valid_request_payload,
-                        )
-
-                        # Should attempt to process (may fail on other dependencies)
-                        assert response.status_code in [200, 400, 404, 500]
+                    assert response.status_code == 200  # Returns 200 with success=False
+                    data = response.json()
+                    assert data["success"] is False
+                    assert "Pipeline execution failed" in data["error"]
