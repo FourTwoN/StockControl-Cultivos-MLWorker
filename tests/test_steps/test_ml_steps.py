@@ -97,8 +97,10 @@ class TestSegmentationStep:
             step = SegmentationStep()
             result_ctx = await step.execute(mock_context)
 
-            # Verify processor was called
-            mock_registry.return_value.get.assert_called_once_with("segmentation")
+            # Verify processor was called with tenant_id
+            mock_registry.return_value.get.assert_called_once_with(
+                "segmentation", tenant_id="test-tenant"
+            )
             mock_processor.process.assert_called_once_with(mock_context.image_path)
 
             # Verify results converted to dicts
@@ -155,8 +157,10 @@ class TestDetectionStep:
             step = DetectionStep()
             result_ctx = await step.execute(mock_context)
 
-            # Verify processor was called
-            mock_registry.return_value.get.assert_called_once_with("detection")
+            # Verify processor was called with tenant_id
+            mock_registry.return_value.get.assert_called_once_with(
+                "detection", tenant_id="test-tenant"
+            )
             mock_processor.process.assert_called_once_with(mock_context.image_path)
 
             # Verify results converted to dicts
@@ -230,8 +234,10 @@ class TestSAHIDetectionStep:
             step = SAHIDetectionStep()
             result_ctx = await step.execute(context_with_config)
 
-            # Verify processor was called with config
-            mock_registry.return_value.get.assert_called_once_with("sahi_detection")
+            # Verify processor was called with tenant_id and config
+            mock_registry.return_value.get.assert_called_once_with(
+                "sahi_detection", tenant_id="test-tenant"
+            )
             mock_processor.process.assert_called_once_with(
                 context_with_config.image_path,
                 slice_height=640,

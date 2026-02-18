@@ -15,7 +15,7 @@ class TestSAHIDetectorProcessor:
     def processor(self) -> SAHIDetectorProcessor:
         """Create processor instance for testing."""
         return SAHIDetectorProcessor(
-            model_path=None,
+            tenant_id="test-tenant",
             worker_id=0,
             confidence_threshold=0.8,
         )
@@ -47,7 +47,8 @@ class TestSAHIDetectorProcessor:
 
     def test_init_default_values(self) -> None:
         """Test processor initialization with defaults."""
-        processor = SAHIDetectorProcessor()
+        processor = SAHIDetectorProcessor(tenant_id="test-tenant")
+        assert processor.tenant_id == "test-tenant"
         assert processor.confidence_threshold == 0.80
         assert processor.worker_id == 0
         assert processor._model is None
@@ -55,10 +56,11 @@ class TestSAHIDetectorProcessor:
     def test_init_custom_values(self) -> None:
         """Test processor initialization with custom values."""
         processor = SAHIDetectorProcessor(
-            model_path="/custom/path.pt",
+            tenant_id="custom-tenant",
             worker_id=2,
             confidence_threshold=0.5,
         )
+        assert processor.tenant_id == "custom-tenant"
         assert processor.confidence_threshold == 0.5
         assert processor.worker_id == 2
 
