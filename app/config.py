@@ -38,63 +38,6 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
-    # Database (Cloud SQL via Unix socket)
-    # =========================================================================
-    db_user: str = Field(
-        default="demeter_app",
-        description="Database user",
-    )
-    db_password: str = Field(
-        default="",
-        description="Database password (from Secret Manager)",
-    )
-    db_name: str = Field(
-        default="demeter",
-        description="Database name",
-    )
-    db_connection_name: str = Field(
-        default="",
-        description="Cloud SQL connection name (project:region:instance)",
-    )
-    db_host: str = Field(
-        default="localhost",
-        description="Database host (for local development)",
-    )
-    db_port: int = Field(
-        default=5432,
-        description="Database port (for local development)",
-    )
-    db_pool_size: int = Field(
-        default=5,
-        description="Database connection pool size",
-    )
-    db_pool_max_overflow: int = Field(
-        default=10,
-        description="Max overflow connections beyond pool size",
-    )
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def database_url(self) -> str:
-        """Build database URL based on environment.
-
-        In Cloud Run, uses Unix socket for Cloud SQL.
-        In local dev, uses TCP connection.
-        """
-        if self.db_connection_name:
-            # Cloud Run: Unix socket connection
-            socket_path = f"/cloudsql/{self.db_connection_name}"
-            return (
-                f"postgresql+asyncpg://{self.db_user}:{self.db_password}"
-                f"@/{self.db_name}?host={socket_path}"
-            )
-        # Local development: TCP connection
-        return (
-            f"postgresql+asyncpg://{self.db_user}:{self.db_password}"
-            f"@{self.db_host}:{self.db_port}/{self.db_name}"
-        )
-
-    # =========================================================================
     # Cloud Storage
     # =========================================================================
     gcs_bucket: str = Field(
