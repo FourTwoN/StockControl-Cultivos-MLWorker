@@ -24,13 +24,13 @@ class BaseProcessor(ABC, Generic[T]):
     inherit from this class and implement the `process()` method.
 
     Key Features:
-        - Model caching via ModelCache singleton
+        - Model caching via ModelCache singleton (per-tenant)
         - Async processing support
         - Resource management (load/unload models)
         - Structured logging
 
     Attributes:
-        model_path: Path to ML model weights (if applicable)
+        tenant_id: Tenant identifier for model loading
         worker_id: GPU worker ID for model assignment (default 0)
         confidence_threshold: Model confidence threshold (if applicable)
 
@@ -40,18 +40,21 @@ class BaseProcessor(ABC, Generic[T]):
 
     def __init__(
         self,
-        model_path: str | Path | None = None,
+        tenant_id: str,
         worker_id: int = 0,
         confidence_threshold: float = 0.25,
     ) -> None:
         """Initialize base processor.
 
         Args:
-            model_path: Path to model weights file (optional)
+            tenant_id: Tenant identifier for model loading
             worker_id: GPU worker ID (0, 1, 2, ...) for model assignment
             confidence_threshold: Detection/classification confidence threshold
         """
-        self.model_path = Path(model_path) if model_path else None
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+
+        self.tenant_id = tenant_id
         self.worker_id = worker_id
         self.confidence_threshold = confidence_threshold
         self._model: Any = None  # Cached model instance
@@ -59,7 +62,7 @@ class BaseProcessor(ABC, Generic[T]):
         logger.info(
             "Processor initialized",
             processor=self.__class__.__name__,
-            model_path=str(self.model_path) if self.model_path else None,
+            tenant_id=tenant_id,
             worker_id=self.worker_id,
             confidence_threshold=self.confidence_threshold,
         )
@@ -132,7 +135,7 @@ class BaseProcessor(ABC, Generic[T]):
         """String representation for debugging."""
         return (
             f"{self.__class__.__name__}("
-            f"model_path={self.model_path}, "
+            f"tenant_id={self.tenant_id}, "
             f"worker_id={self.worker_id}, "
             f"confidence_threshold={self.confidence_threshold}"
             f")"
