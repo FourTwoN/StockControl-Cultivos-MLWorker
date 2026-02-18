@@ -48,7 +48,7 @@ class SegmentationStep(PipelineStep):
 
         try:
             # Get segmentation processor from registry
-            processor = get_processor_registry().get("segmentation")
+            processor = get_processor_registry().get("segmentation", tenant_id=ctx.tenant_id)
 
             # Run segmentation
             segment_results = await processor.process(ctx.image_path)
