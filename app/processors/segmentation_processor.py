@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
-
 from app.infra.logging import get_logger
 from app.ml.model_cache import ModelCache
 from app.processors.base_processor import BaseProcessor

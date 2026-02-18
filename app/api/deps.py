@@ -9,8 +9,8 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
 
-from app.infra.storage import StorageClient, get_storage_client
 from app.infra.logging import get_logger
+from app.infra.storage import StorageClient, get_storage_client
 
 logger = get_logger(__name__)
 

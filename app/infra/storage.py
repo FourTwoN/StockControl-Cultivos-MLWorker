@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from google.cloud import storage
-from google.cloud.storage import Blob, Bucket
+from google.cloud.storage import Bucket
 
 from app.config import settings
 from app.infra.logging import get_logger

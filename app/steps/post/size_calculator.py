@@ -99,7 +99,7 @@ class SizeCalculatorStep(PipelineStep):
 
         if std_dev == 0:
             # All same size - assign medium
-            return {idx: SIZE_M for idx in range(len(detections))}
+            return dict.fromkeys(range(len(detections)), SIZE_M)
 
         z_scores = [(area - mean_area) / std_dev for area in areas]
 

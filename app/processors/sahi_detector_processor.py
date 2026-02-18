@@ -27,10 +27,10 @@ try:
 except ImportError:
     Image = None
 
+from app.infra.logging import get_logger
 from app.ml.model_cache import ModelCache
 from app.processors.base_processor import BaseProcessor
 from app.processors.detector_processor import DetectionResult
-from app.infra.logging import get_logger
 
 if TYPE_CHECKING:
     from sahi.prediction import PredictionResult

@@ -1,19 +1,19 @@
 """Pipeline steps for ML processing."""
 
 from app.core.step_registry import StepRegistry
+from app.steps.ml.detection_step import DetectionStep
+from app.steps.ml.sahi_detection_step import SAHIDetectionStep
 
 # Import ML steps
 from app.steps.ml.segmentation_step import SegmentationStep
-from app.steps.ml.detection_step import DetectionStep
-from app.steps.ml.sahi_detection_step import SAHIDetectionStep
+from app.steps.post.aggregate_detections import AggregateDetectionsStep
 
 # Import post-processor steps
 from app.steps.post.segment_filter import SegmentFilterStep
 from app.steps.post.size_calculator import SizeCalculatorStep
 from app.steps.post.species_distributor import SpeciesDistributorStep
-from app.steps.post.aggregate_detections import AggregateDetectionsStep
-from app.steps.post.visualize_detections import VisualizeDetectionsStep
 from app.steps.post.upload_image import UploadImageStep
+from app.steps.post.visualize_detections import VisualizeDetectionsStep
 
 
 def register_all_steps() -> None:

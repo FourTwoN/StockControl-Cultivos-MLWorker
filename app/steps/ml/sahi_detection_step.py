@@ -4,7 +4,6 @@ Wraps SAHIDetectorProcessor to implement PipelineStep interface.
 Supports segment-aware detection when segment_type is specified in step_config.
 """
 
-from pathlib import Path
 from typing import Any
 
 from app.core.pipeline_step import PipelineStep

@@ -13,7 +13,6 @@ from app.core.processing_context import ProcessingContext
 from app.core.step_registry import StepRegistry
 from app.infra.logging import get_logger
 
-
 logger = get_logger(__name__)
 
 

@@ -1,8 +1,6 @@
 """Common schemas for API requests and responses."""
 
-from datetime import datetime
 from typing import Any, Generic, TypeVar
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 

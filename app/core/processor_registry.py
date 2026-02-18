@@ -101,8 +101,8 @@ def create_default_registry() -> ProcessorRegistry:
         ProcessorRegistry with all standard processors
     """
     from app.processors.detector_processor import DetectorProcessor
-    from app.processors.segmentation_processor import SegmentationProcessor
     from app.processors.sahi_detector_processor import SAHIDetectorProcessor
+    from app.processors.segmentation_processor import SegmentationProcessor
 
     registry = ProcessorRegistry()
 

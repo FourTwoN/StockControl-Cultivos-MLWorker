@@ -75,7 +75,7 @@ class BackendClient:
                 status_code=response.status_code,
             )
 
-            return cast(dict[str, Any], response.json())
+            return cast("dict[str, Any]", response.json())
 
     async def report_error(
         self,
@@ -126,4 +126,4 @@ class BackendClient:
             )
             response.raise_for_status()
 
-            return cast(dict[str, Any], response.json())
+            return cast("dict[str, Any]", response.json())

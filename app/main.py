@@ -4,22 +4,21 @@ ML Worker service for background processing via Cloud Tasks.
 Fully stateless - no database access.
 """
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.config import settings
-from app.infra.logging import get_logger, setup_logging
-from app.ml.model_cache import ModelCache
-from app.core.processor_registry import get_processor_registry
-from app.steps import register_all_steps
-
 # Import routers
 from app.api.routes.health import router as health_router
 from app.api.routes.tasks import router as tasks_router
+from app.config import settings
+from app.core.processor_registry import get_processor_registry
+from app.infra.logging import get_logger, setup_logging
+from app.ml.model_cache import ModelCache
+from app.steps import register_all_steps
 
 # Setup logging first
 setup_logging()

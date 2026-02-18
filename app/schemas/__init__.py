@@ -1,6 +1,6 @@
 """Pydantic schemas for request/response validation."""
 
-from app.schemas.common import TaskResult, ErrorResponse, HealthResponse
+from app.schemas.common import ErrorResponse, HealthResponse, TaskResult
 from app.schemas.pipeline_definition import (
     ChainDefinition,
     ChordDefinition,

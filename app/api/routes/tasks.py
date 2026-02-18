@@ -63,7 +63,7 @@ async def process_task(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid pipeline: {e}",
-            )
+            ) from e
 
         logger.info(
             "Pipeline validated",
