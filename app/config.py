@@ -54,20 +54,10 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
-    # ML Models
+    # ML Models (per-tenant)
     # =========================================================================
-    model_path: str = Field(
-        default="./checkpoints",
-        description="Path to ML models (local or gs:// for GCS)",
-    )
-    detection_model: str = Field(
-        default="detect.onnx",
-        description="Detection model filename (ONNX format)",
-    )
-    segmentation_model: str = Field(
-        default="segment.onnx",
-        description="Segmentation model filename (ONNX format)",
-    )
+    # Models are loaded per-tenant from: gs://{gcs_bucket}/models/{tenant_id}/
+    # No global model settings needed - each tenant has their own models
     confidence_threshold: float = Field(
         default=0.80,
         ge=0.0,
