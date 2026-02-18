@@ -32,10 +32,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Startup:
     - Initialize processor registry
     - Register pipeline steps
-    - Optionally preload ML models
 
     Shutdown:
     - Clear model caches
+
+    Note: Models are loaded per-tenant on first request, not preloaded globally.
     """
     logger.info(
         "ML Worker starting",
@@ -51,14 +52,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     register_all_steps()
     logger.info("Pipeline steps registered")
 
-    # Preload models in production (skip in dev for faster startup)
-    if settings.environment != "dev":
-        logger.info("Preloading ML models...")
-        try:
-            ModelCache.get_model("detect", worker_id=0)
-            logger.info("Detection model preloaded")
-        except Exception as e:
-            logger.warning("Model preloading failed", error=str(e))
+    # Models are now loaded per-tenant on first request
+    # No global preloading needed
 
     yield
 
