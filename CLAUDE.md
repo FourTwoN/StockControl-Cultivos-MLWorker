@@ -46,6 +46,32 @@ All steps implement `PipelineStep` interface and can be composed in any order:
 - `visualize_detections` - Draw detection boxes on image
 - `upload_image` - Upload image to GCS with thumbnail generation (reusable for original/processed)
 
+### Per-Tenant ML Models
+
+Each tenant has their own ML models stored in GCS:
+
+```
+gs://{gcs_bucket}/models/
+├── tenant-001/
+│   ├── detect.onnx
+│   └── segment.onnx
+└── tenant-002/
+    ├── detect.onnx
+    └── segment.onnx
+```
+
+**How it works:**
+- Models are loaded on first request per tenant and cached in `ModelCache`
+- Cache key format: `{tenant_id}_{model_type}_worker_{worker_id}`
+- If a model doesn't exist for a tenant, the request fails with HTTP 400
+- Steps pass `tenant_id` from `ProcessingContext` to processors
+
+**Local development:**
+When `USE_LOCAL_STORAGE=true`, models are loaded from:
+```
+{LOCAL_STORAGE_ROOT}/models/{tenant_id}/{model_type}.onnx
+```
+
 ### Pipeline DSL (Celery Canvas-inspired)
 
 The system uses a serializable DSL sent directly in the request payload. Supports:
@@ -233,7 +259,7 @@ local_storage/
 
 - **Immutability**: `ProcessingContext` is frozen - always return new instance
 - **Processors vs Steps**: Processors do raw ML inference, Steps wrap them for pipeline
-- **No tenant logic in processors**: Keep ML code generic, put tenant logic in post-processors
+- **Per-tenant models**: Processors receive `tenant_id` and load tenant-specific models from GCS
 - **Stateless**: All pipeline definitions come in the request - no database access
 - **TDD**: Write tests first, especially for new steps
 
