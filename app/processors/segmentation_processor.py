@@ -62,18 +62,18 @@ class SegmentationProcessor(BaseProcessor[list[SegmentResult]]):
 
     def __init__(
         self,
-        model_path: str | Path | None = None,
+        tenant_id: str,
         worker_id: int = 0,
         confidence_threshold: float = 0.50,
     ) -> None:
         """Initialize segmentation processor.
 
         Args:
-            model_path: Path to YOLO segmentation model
+            tenant_id: Tenant identifier for model loading
             worker_id: GPU worker ID
             confidence_threshold: Minimum confidence score
         """
-        super().__init__(model_path, worker_id, confidence_threshold)
+        super().__init__(tenant_id, worker_id, confidence_threshold)
         self._model: Any = None
         self._worker_id_cached: int | None = None
 
@@ -108,7 +108,11 @@ class SegmentationProcessor(BaseProcessor[list[SegmentResult]]):
                 worker_id=self.worker_id,
                 model_type="segment",
             )
-            self._model = ModelCache.get_model("segment", self.worker_id)
+            self._model = ModelCache.get_model(
+                tenant_id=self.tenant_id,
+                model_type="segment",
+                worker_id=self.worker_id,
+            )
             self._worker_id_cached = self.worker_id
 
             is_onnx = getattr(self._model, "_mlworker_is_onnx", False)
