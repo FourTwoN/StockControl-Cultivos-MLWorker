@@ -22,7 +22,7 @@ class TestHealthEndpoints:
         assert response.status_code == 200
 
         data = response.json()
-        assert data["status"] == "alive"
+        assert data["status"] == "healthy"
 
     @pytest.mark.asyncio
     async def test_health_ready_endpoint(self, client: AsyncClient):
