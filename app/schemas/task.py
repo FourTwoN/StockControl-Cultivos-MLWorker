@@ -6,11 +6,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.pipeline_definition import PipelineDefinition
+
 
 class ProcessingRequest(BaseModel):
     """Unified request payload for all ML processing tasks.
 
     Sent by Backend via Cloud Tasks to the single /tasks/process endpoint.
+    Pipeline definition is included directly in the request (no DB lookup).
     """
 
     tenant_id: str = Field(
@@ -24,21 +27,16 @@ class ProcessingRequest(BaseModel):
         min_length=1,
         description="GCS URL to image (gs://bucket/path)",
     )
-    pipeline: str = Field(
-        default="DETECTION",
-        description="Pipeline name from industry config (e.g., DETECTION, FULL_PIPELINE)",
+    pipeline_definition: PipelineDefinition = Field(
+        description="Full pipeline DSL definition",
     )
-    options: dict[str, Any] | None = Field(
-        default=None,
-        description="Optional processing overrides (confidence_override, etc.)",
+    settings: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Tenant settings for pipeline execution",
     )
     callback_url: str | None = Field(
         default=None,
         description="Optional callback URL for results notification",
-    )
-    species_config: list[dict[str, Any]] | None = Field(
-        default=None,
-        description="Species configuration for classification (agro industry)",
     )
 
     model_config = {"extra": "forbid"}
@@ -59,14 +57,6 @@ class ProcessingRequest(BaseModel):
             raise ValueError("Invalid tenant_id format")
         return v
 
-    @field_validator("pipeline")
-    @classmethod
-    def validate_pipeline(cls, v: str) -> str:
-        """Validate pipeline name format."""
-        if not v or not v.replace("_", "").isalnum():
-            raise ValueError("Pipeline name must be alphanumeric with underscores")
-        return v.upper()
-
 
 class ProcessingResponse(BaseModel):
     """Unified response payload for ML processing tasks."""
@@ -75,7 +65,7 @@ class ProcessingResponse(BaseModel):
     tenant_id: str = Field(description="Tenant ID")
     session_id: UUID = Field(description="Processing session UUID")
     image_id: UUID = Field(description="Image UUID")
-    pipeline: str = Field(description="Pipeline that was executed")
+    pipeline_type: str = Field(description="Pipeline type that was executed (chain/group/chord)")
 
     # Results from each step (keyed by step name)
     results: dict[str, Any] = Field(
