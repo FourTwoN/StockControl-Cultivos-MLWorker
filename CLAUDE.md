@@ -2,15 +2,17 @@
 
 ML processing microservice for the cultivation industry. Runs segmentation, detection, and classification pipelines on plant images.
 
+**Stateless Architecture**: Pipeline definitions are sent directly in the request payload. No database access.
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          MLWorker                                   │
+│                      MLWorker (Stateless)                           │
 ├─────────────────────────────────────────────────────────────────────┤
 │  ┌──────────────────┐     ┌──────────────────────────────────────┐ │
-│  │  TenantConfigCache│────▶│  PipelineParser                      │ │
-│  │  (DB + 5min cache)│     │  JSON → DSL → Executable             │ │
+│  │  Request Payload │────▶│  PipelineParser                      │ │
+│  │  (pipeline_def)  │     │  JSON → DSL → Executable             │ │
 │  └──────────────────┘     └──────────────────────────────────────┘ │
 │                                           │                         │
 │  ┌────────────────────────────────────────┼────────────────────────┐│
@@ -36,7 +38,7 @@ All steps implement `PipelineStep` interface and can be composed in any order:
 - `detection` - Standard YOLO detection
 - `sahi_detection` - Tiled detection for large images
 
-**Post-Processor Steps (tenant-configurable via settings):**
+**Post-Processor Steps (configurable via settings):**
 - `segment_filter` - Filter segments by `class_name` and generate crops for parallel detection
 - `aggregate_detections` - Merge detections from parallel branches (chord callback)
 - `size_calculator` - Calculate sizes with z-scores (thresholds: S < -2σ, M ≤ 1σ, L ≤ 2σ, XL > 2σ)
@@ -46,7 +48,7 @@ All steps implement `PipelineStep` interface and can be composed in any order:
 
 ### Pipeline DSL (Celery Canvas-inspired)
 
-The system uses a serializable DSL stored as JSONB in the database. Supports:
+The system uses a serializable DSL sent directly in the request payload. Supports:
 
 **Primitives:**
 - `chain` - Sequential execution
@@ -54,9 +56,13 @@ The system uses a serializable DSL stored as JSONB in the database. Supports:
 - `chord` - Parallel + aggregator callback
 - `step` - Step reference with config (kwargs)
 
-**Example tenant_config in DB:**
+**Example request payload:**
 ```json
 {
+  "tenant_id": "tenant-001",
+  "session_id": "uuid",
+  "image_id": "uuid",
+  "image_url": "gs://bucket/path/image.jpg",
   "pipeline_definition": {
     "type": "chain",
     "steps": [
@@ -111,27 +117,17 @@ gs://{bucket}/{tenant_id}/
 ```
 
 **Execution flow:**
-1. `TenantConfigCache` loads `pipeline_definition` (JSONB) from DB
+1. Backend sends request with `pipeline_definition` and `settings`
 2. `PipelineParser` validates JSON structure (Pydantic) and step names (StepRegistry)
 3. `PipelineParser.parse()` converts JSON → DSL dataclasses (Chain, Group, Chord)
 4. `PipelineExecutor.execute()` runs the pipeline with proper parallelism
-
-### Tenant Configuration
-
-Pipeline config stored in `tenant_config` table as JSON DSL:
-```sql
-SELECT tenant_id, pipeline_definition, settings FROM tenant_config;
-```
-
-Loaded into `TenantConfigCache` at startup, refreshed every 5 minutes.
-**Validation is fail-fast:** Invalid pipeline definitions are rejected at load time.
 
 ## Directory Structure
 
 ```
 app/
 ├── api/routes/          # FastAPI endpoints
-│   ├── tasks.py         # /process, /compress
+│   ├── tasks.py         # /process
 │   └── health.py        # Health checks
 ├── core/                # Core abstractions
 │   ├── pipeline_step.py      # PipelineStep ABC
@@ -140,9 +136,9 @@ app/
 │   ├── pipeline_executor.py  # DSL executor with asyncio.gather
 │   ├── processing_context.py # Immutable context
 │   ├── step_registry.py      # Step registration
-│   ├── tenant_config.py      # Config cache
 │   └── processor_registry.py # ML processor registry
 ├── schemas/             # Pydantic schemas
+│   ├── task.py               # ProcessingRequest, ProcessingResponse
 │   └── pipeline_definition.py  # PipelineDefinition, StepDefinition, etc.
 ├── steps/               # Pipeline steps
 │   ├── ml/              # ML step wrappers
@@ -153,13 +149,15 @@ app/
 │       ├── segment_filter.py
 │       ├── aggregate_detections.py
 │       ├── size_calculator.py
-│       └── species_distributor.py
+│       ├── species_distributor.py
+│       ├── visualize_detections.py
+│       └── upload_image.py
 ├── processors/          # Raw ML processors
 │   ├── base_processor.py
 │   ├── segmentation_processor.py
 │   ├── detector_processor.py
 │   └── sahi_detector_processor.py
-├── infra/               # Infrastructure (DB, storage, logging)
+├── infra/               # Infrastructure (storage, logging)
 └── ml/                  # Model loading and caching
 ```
 
@@ -167,9 +165,10 @@ app/
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /tasks/process` | Dynamic pipeline per tenant (uses TenantConfigCache) |
-| `POST /tasks/compress` | Image compression and thumbnails |
+| `POST /tasks/process` | Process image using pipeline_definition from request |
 | `GET /health` | Health check |
+| `GET /health/ready` | Readiness check (ML models loaded) |
+| `GET /health/live` | Liveness check |
 
 ## Adding a New Post-Processor
 
@@ -194,19 +193,7 @@ from app.steps.post.my_step import MyStep
 StepRegistry.register("my_step", MyStep)
 ```
 
-3. Add to tenant pipeline_definition in DB:
-```sql
-UPDATE tenant_config
-SET pipeline_definition = '{
-  "type": "chain",
-  "steps": [
-    {"type": "step", "name": "segmentation"},
-    {"type": "step", "name": "my_step"},
-    {"type": "step", "name": "detection"}
-  ]
-}'::jsonb
-WHERE tenant_id = 'tenant-xyz';
-```
+3. Backend includes the step in pipeline_definition when sending requests.
 
 ## Development
 
@@ -224,7 +211,6 @@ pytest tests/test_schemas/test_pipeline_definition.py -v  # Schema tests
 
 ### Environment Variables
 ```bash
-DATABASE_URL=postgresql+asyncpg://...
 GCS_BUCKET=ml-worker-bucket
 ENVIRONMENT=dev
 USE_LOCAL_STORAGE=true        # Use local filesystem instead of GCS
@@ -248,21 +234,8 @@ local_storage/
 - **Immutability**: `ProcessingContext` is frozen - always return new instance
 - **Processors vs Steps**: Processors do raw ML inference, Steps wrap them for pipeline
 - **No tenant logic in processors**: Keep ML code generic, put tenant logic in post-processors
-- **No hardcoded pipelines**: All pipelines defined in DB as JSON DSL
+- **Stateless**: All pipeline definitions come in the request - no database access
 - **TDD**: Write tests first, especially for new steps
-
-## Database
-
-### tenant_config table
-```sql
-CREATE TABLE tenant_config (
-    tenant_id VARCHAR(100) PRIMARY KEY,
-    pipeline_definition JSONB NOT NULL,  -- DSL as JSON
-    settings JSONB NOT NULL DEFAULT '{}',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-```
 
 ## Common Tasks
 
@@ -276,13 +249,6 @@ CREATE TABLE tenant_config (
 ```python
 # PipelineExecutor logs each step
 # Check logs for: "Executing step", "Executing chain", "Executing chord"
-```
-
-### Refresh tenant config manually
-```python
-cache = get_tenant_cache()
-async with get_db_session() as session:
-    await cache.load_configs(session)
 ```
 
 ### Validate pipeline definition
