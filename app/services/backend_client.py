@@ -1,5 +1,6 @@
 """HTTP client for Backend callback communication."""
 
+from typing import Any, cast
 from uuid import UUID
 
 import httpx
@@ -32,7 +33,7 @@ class BackendClient:
         self,
         tenant_id: str,
         results: ProcessingResultRequest,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Send ML processing results to Backend.
 
         Args:
@@ -74,7 +75,7 @@ class BackendClient:
                 status_code=response.status_code,
             )
 
-            return response.json()
+            return cast(dict[str, Any], response.json())
 
     async def report_error(
         self,
@@ -83,7 +84,7 @@ class BackendClient:
         image_id: UUID,
         error_message: str,
         error_type: str = "ProcessingError",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Report processing error to Backend.
 
         Args:
@@ -125,4 +126,4 @@ class BackendClient:
             )
             response.raise_for_status()
 
-            return response.json()
+            return cast(dict[str, Any], response.json())
