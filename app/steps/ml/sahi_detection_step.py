@@ -72,7 +72,7 @@ class SAHIDetectionStep(PipelineStep):
         )
 
         try:
-            processor = get_processor_registry().get("sahi_detection")
+            processor = get_processor_registry().get("sahi_detection", tenant_id=ctx.tenant_id)
             detection_results = await processor.process(
                 ctx.image_path,
                 slice_height=slice_height,
@@ -135,7 +135,7 @@ class SAHIDetectionStep(PipelineStep):
             slice_width=slice_width,
         )
 
-        processor = get_processor_registry().get("sahi_detection")
+        processor = get_processor_registry().get("sahi_detection", tenant_id=ctx.tenant_id)
         all_detections: list[dict[str, Any]] = []
 
         for segment in target_segments:
