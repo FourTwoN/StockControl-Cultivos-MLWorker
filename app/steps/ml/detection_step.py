@@ -59,7 +59,7 @@ class DetectionStep(PipelineStep):
         )
 
         try:
-            processor = get_processor_registry().get("detection")
+            processor = get_processor_registry().get("detection", tenant_id=ctx.tenant_id)
             detection_results = await processor.process(ctx.image_path)
 
             detection_dicts: list[dict[str, Any]] = [
@@ -113,7 +113,7 @@ class DetectionStep(PipelineStep):
             segment_count=len(target_segments),
         )
 
-        processor = get_processor_registry().get("detection")
+        processor = get_processor_registry().get("detection", tenant_id=ctx.tenant_id)
         all_detections: list[dict[str, Any]] = []
 
         for segment in target_segments:
