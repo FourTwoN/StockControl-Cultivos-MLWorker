@@ -1,7 +1,7 @@
 [project]
 name = "stockcontrol-mlworker"
-version = "0.1.0"
-description = "ML Worker for StockControl - Background processing with Cloud Tasks"
+version = "0.2.0"
+description = "ML Worker for StockControl - Stateless background processing with Cloud Tasks"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -13,11 +13,6 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
-
-    # Database
-    "sqlalchemy[asyncio]>=2.0.36",
-    "asyncpg>=0.30.0",
-    "greenlet>=3.1.0",
 
     # Google Cloud
     "google-cloud-storage>=2.18.0",
