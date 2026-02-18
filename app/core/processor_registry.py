@@ -56,8 +56,15 @@ class ProcessorRegistry:
         Raises:
             KeyError: If processor not registered
         """
-        # Create cache key from name and kwargs
-        cache_key = f"{name}:{hash(frozenset(init_kwargs.items()))}"
+        # Create cache key from name and kwargs (handle nested dicts)
+        def make_hashable(obj: Any) -> Any:
+            if isinstance(obj, dict):
+                return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
+            if isinstance(obj, list):
+                return tuple(make_hashable(x) for x in obj)
+            return obj
+
+        cache_key = f"{name}:{hash(make_hashable(init_kwargs))}"
 
         if cache_key not in self._instances:
             if name not in self._processors:

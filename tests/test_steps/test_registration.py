@@ -66,12 +66,12 @@ def test_can_build_full_pipeline():
 
 
 def test_all_registered_steps_count():
-    """Verify that exactly 7 steps are registered."""
+    """Verify that exactly 9 steps are registered."""
     register_all_steps()
 
     available = StepRegistry.available_steps()
 
-    assert len(available) == 7
+    assert len(available) == 9
 
 
 def test_get_specific_step_instances():
