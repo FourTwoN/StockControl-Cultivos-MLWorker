@@ -89,18 +89,18 @@ class DetectorProcessor(BaseProcessor[list[DetectionResult]]):
 
     def __init__(
         self,
-        model_path: str | Path | None = None,
+        tenant_id: str,
         worker_id: int = 0,
         confidence_threshold: float = 0.80,
     ) -> None:
         """Initialize detector processor.
 
         Args:
-            model_path: Path to YOLO detection model (optional - uses default from ModelCache)
+            tenant_id: Tenant identifier for model loading
             worker_id: GPU worker ID (0, 1, 2, ...)
             confidence_threshold: Minimum confidence score (0.0-1.0)
         """
-        super().__init__(model_path, worker_id, confidence_threshold)
+        super().__init__(tenant_id, worker_id, confidence_threshold)
         self._model: Any = None
         self._worker_id_cached: int | None = None
 
@@ -137,7 +137,11 @@ class DetectorProcessor(BaseProcessor[list[DetectionResult]]):
                 worker_id=self.worker_id,
                 model_type="detect",
             )
-            self._model = ModelCache.get_model("detect", self.worker_id)
+            self._model = ModelCache.get_model(
+                tenant_id=self.tenant_id,
+                model_type="detect",
+                worker_id=self.worker_id,
+            )
             self._worker_id_cached = self.worker_id
 
             is_onnx = getattr(self._model, "_mlworker_is_onnx", False)
