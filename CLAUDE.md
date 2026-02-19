@@ -45,6 +45,7 @@ All steps implement `PipelineStep` interface and can be composed in any order:
 - `species_distributor` - Distribute detections across species
 - `visualize_detections` - Draw detection boxes on image
 - `upload_image` - Upload image to GCS with thumbnail generation (reusable for original/processed)
+- `send_results_backend` - Send final results to Backend via HTTP callback
 
 ### Per-Tenant ML Models
 
@@ -112,7 +113,8 @@ The system uses a serializable DSL sent directly in the request payload. Support
       {"type": "step", "name": "visualize_detections"},
       {"type": "step", "name": "upload_image", "kwargs": {
         "source": "processed", "dest_prefix": "processed", "thumbnail_sizes": [256, 512]
-      }}
+      }},
+      {"type": "step", "name": "send_results_backend"}
     ]
   },
   "settings": {
@@ -141,6 +143,19 @@ gs://{bucket}/{tenant_id}/
 ├── processed/{image_id}.jpg
 └── processed_thumbnails/{image_id}_256.jpg
 ```
+
+**`send_results_backend` step:**
+
+Sends final ML results to Backend via HTTP callback. Should be the last step in the pipeline.
+
+| Data Source | Transforms To |
+|-------------|---------------|
+| `ctx.raw_detections` | `DetectionResultItem[]` |
+| `ctx.results["total_count"]` | `EstimationResultItem` |
+| `ctx.results["size_distribution"]` | `EstimationResultItem[]` (size_S, size_M, etc.) |
+| `ctx.results["species_distribution"]` | `EstimationResultItem[]` (species_X) |
+
+Endpoint: `POST {BACKEND_URL}/api/v1/processing-callback/results`
 
 **Execution flow:**
 1. Backend sends request with `pipeline_definition` and `settings`
@@ -177,7 +192,8 @@ app/
 │       ├── size_calculator.py
 │       ├── species_distributor.py
 │       ├── visualize_detections.py
-│       └── upload_image.py
+│       ├── upload_image.py
+│       └── send_results_backend.py
 ├── processors/          # Raw ML processors
 │   ├── base_processor.py
 │   ├── segmentation_processor.py

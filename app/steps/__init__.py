@@ -10,6 +10,7 @@ from app.steps.post.aggregate_detections import AggregateDetectionsStep
 
 # Import post-processor steps
 from app.steps.post.segment_filter import SegmentFilterStep
+from app.steps.post.send_results_backend import SendResultsBackendStep
 from app.steps.post.size_calculator import SizeCalculatorStep
 from app.steps.post.species_distributor import SpeciesDistributorStep
 from app.steps.post.upload_image import UploadImageStep
@@ -38,6 +39,7 @@ def register_all_steps() -> None:
     StepRegistry.register("aggregate_detections", AggregateDetectionsStep)
     StepRegistry.register("visualize_detections", VisualizeDetectionsStep)
     StepRegistry.register("upload_image", UploadImageStep)
+    StepRegistry.register("send_results_backend", SendResultsBackendStep)
 
 
 __all__ = [
@@ -51,4 +53,5 @@ __all__ = [
     "AggregateDetectionsStep",
     "VisualizeDetectionsStep",
     "UploadImageStep",
+    "SendResultsBackendStep",
 ]
